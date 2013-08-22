@@ -31,15 +31,17 @@
  
 #if defined _optin_multimod_included
   #endinput
+#endif
 #define _optin_multimod_included
 
 #include <sourcemod>
 
-functag OptInMultiMod_StatusChanged public(bool:enabled);
+functag public OptInMultiMod_StatusChanged(bool:enabled);
 
-functag OptInMultiMod_ValidateMap bool:public(String:map[]);
+functag public bool:OptInMultiMod_ValidateMap(const String:map[]);
 
 native OptInMultiMod_Register(const String:name[], OptInMultiMod_ValidateMap:validateMap, OptInMultiMod_StatusChanged:status);
+native OptInMultiMod_Unregister();
 
 // You should NEVER require this plugin
 public SharedPlugin:__pl_optin_multimod = 
@@ -56,4 +58,5 @@ public SharedPlugin:__pl_optin_multimod =
 public __pl_optin_multimod_SetNTVOptional()
 {
 	MarkNativeAsOptional("OptInMultiMod_Register");
+	MarkNativeAsOptional("OptInMultiMod_Unregister");
 }
