@@ -78,6 +78,7 @@ public APLRes:AskPluginLoad2(Handle:myself, bool:late, String:error[], err_max)
 	g_bLate = late;
 	
 	CreateNative("OptInMultiMod_Register", Native_Register);
+	CreateNative("OptInMultiMod_Unregister", Native_Unregister);
 	
 	RegPluginLibrary("optin_multimod");
 	
@@ -110,7 +111,7 @@ public OnPluginStart()
 	}
 	
 	g_Kv_Plugins = CreateKeyValues("MultiMod");
-	g_Array_CurrentPlugins = CreateArray(ByteCountToCells(64));
+	//g_Array_CurrentPlugins = CreateArray(ByteCountToCells(64));
 	AutoExecConfig(true, "optin_multimod.phrases");
 	LoadTranslations("optin_multimod");
 }
@@ -127,6 +128,10 @@ public OnConfigsExecuted()
 		{
 			ResetConVar(g_Cvar_BonusRoundTime);
 		}
+		
+		new String:map[PLATFORM_MAX_PATH];
+		GetCurrentMap(map, PLATFORM_MAX_PATH);
+		g_Array_CurrentPlugins = CheckMap(map);
 	}
 }
 
@@ -213,7 +218,7 @@ Handle:CheckMap(const String:map[])
 			new String:name[64];
 			KvGetSectionName(g_Kv_Plugins, name, sizeof(name));
 			
-			PushArrayString(g_Array_CurrentPlugins, name);
+			PushArrayString(array_PluginNames, name);
 		}
 		
 	} while (KvGotoNextKey(g_Kv_Plugins));
@@ -233,9 +238,48 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 	{
 	}
 	
-	if (GetConVarInt(g_Cvar_Mode) & MultiModMode_RandomRound)
+	if (g_NextMode[0] == '\0')
 	{
+		ChooseRandomMode(g_NextMode, sizeof(g_NextMode));
 	}
+	
+	KvRewind(g_Kv_Plugins);
+	
+	if (g_CurrentMode[0] != '\0')
+	{
+		if (KvJumpToKey(g_Kv_Plugins, g_CurrentMode))
+		{
+			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, "statusChanged", _:INVALID_HANDLE);
+			if (statusForward != INVALID_HANDLE)
+			{
+				Call_StartForward(statusForward);
+				Call_PushCell(false);
+				Call_Finish();
+			}
+			KvGoBack(g_Kv_Plugins);
+		}
+	}
+	
+	if (!KvJumpToKey(g_Kv_Plugins, g_NextMode))
+	{
+		LogError("Could not find mode: %s", g_NextMode);
+		return Plugin_Continue;
+	}
+	
+	new Handle:newStatusForward = Handle:KvGetNum(g_Kv_Plugins, "statusChanged", _:INVALID_HANDLE);
+	if (newStatusForward == INVALID_HANDLE)
+	{
+		LogError("Could not find Status Changed forward for mode: %s", g_NextMode);
+		return Plugin_Continue;
+	}
+	
+	Call_StartForward(newStatusForward);
+	Call_PushCell(true);
+	Call_Finish();
+	
+	strcopy(g_CurrentMode, sizeof(g_CurrentMode), g_NextMode);
+	g_NextMode[0] = '\0';
+	
 	g_bFirstRound = false;
 
 	if (!g_bEndOfMapVoteFinished && g_bMapChooser && EndOfMapVoteEnabled() && HasEndOfMapVoteFinished())
@@ -244,15 +288,26 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 		GetNextMap(map, PLATFORM_MAX_PATH);
 		
 		SharedMapLogic(map);
-		//TODO Do something with the next map
+		g_bEndOfMapVoteFinished = true;
 	}
 	
 	return Plugin_Continue;
 }
 
+ChooseRandomMode(String:mode[], maxlength)
+{
+	new size = GetArraySize(g_Array_CurrentPlugins);
+	
+	GetArrayString(g_Array_CurrentPlugins, GetRandomInt(0, size - 1), mode, maxlength);
+}
+
 // nocopy because we don't care who wins
 public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 {
+	if (GetConVarInt(g_Cvar_Frequency) == 0)
+	{
+		ChooseRandomMode(g_NextMode, sizeof(g_NextMode));
+	}
 }
 
 public UMC_OnNextmapSet(Handle:kv, const String:map[], const String:group[], const String:display[])
@@ -362,7 +417,17 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 		
 		case MenuAction_VoteCancel:
 		{
-			
+			if (useNativeVotes)
+			{
+				if (param1 == VoteCancel_NoVotes)
+				{
+					NativeVotes_DisplayFail(menu, NativeVotesFail_NotEnoughVotes);
+				}
+				else
+				{
+					NativeVotes_DisplayFail(menu, NativeVotesFail_Generic);
+				}
+			}
 		}
 		
 		case MenuAction_VoteEnd:
@@ -380,7 +445,7 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 			
 			
 			
-			PrintHintTextToAll("%t", "Vote Win", winner);
+			PrintHintTextToAll("%t", "Vote Win NextMap", winner);
 		}
 	}
 }
@@ -403,7 +468,39 @@ public VoteHandlerNextRound(Handle:menu, MenuAction:action, param1, param2)
 		{
 			CloseHandle(menu);
 		}
+		
+		case MenuAction_VoteCancel:
+		{
+			if (useNativeVotes)
+			{
+				if (param1 == VoteCancel_NoVotes)
+				{
+					NativeVotes_DisplayFail(menu, NativeVotesFail_NotEnoughVotes);
+				}
+				else
+				{
+					NativeVotes_DisplayFail(menu, NativeVotesFail_Generic);
+				}
+			}
+		}
+		
 	}
+}
+
+public Native_Unregister(Handle:plugin, args)
+{
+	new size;
+	GetNativeStringLength(1, size);
+	
+	if (size <= 0)
+	{
+		ThrowNativeError(SP_ERROR_NATIVE, "Invalid Plugin Name.");
+		return;
+	}
+	new String:name[size];
+	GetNativeString(1, name, size);
+	
+	RemovePlugin(name);
 }
 
 // native OptInMultiMod_Register(const String:name[], OptInMultiMod_ValidateMap:validateMap, OptInMultiMod_StatusChanged:status);
@@ -511,13 +608,13 @@ RemovePlugin(const String:name[])
 	KvRewind(g_Kv_Plugins);
 	if (KvJumpToKey(g_Kv_Plugins, name))
 	{
-		new Handle:validateForward = KvGetNum(g_Kv_Plugins, "validateMap", INVALID_HANDLE);
+		new Handle:validateForward = Handle:KvGetNum(g_Kv_Plugins, "validateMap", _:INVALID_HANDLE);
 		if (validateForward != INVALID_HANDLE)
 		{
 			CloseHandle(validateForward);
 		}
 		
-		new Handle:statusChanged = KvGetNum(g_Kv_Plugins, "statusChanged", INVALID_HANDLE);
+		new Handle:statusChanged = Handle:KvGetNum(g_Kv_Plugins, "statusChanged", _:INVALID_HANDLE);
 		if (statusChanged != INVALID_HANDLE)
 		{
 			CloseHandle(statusChanged);

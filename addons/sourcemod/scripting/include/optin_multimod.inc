@@ -41,7 +41,7 @@ functag public OptInMultiMod_StatusChanged(bool:enabled);
 functag public bool:OptInMultiMod_ValidateMap(const String:map[]);
 
 native OptInMultiMod_Register(const String:name[], OptInMultiMod_ValidateMap:validateMap, OptInMultiMod_StatusChanged:status);
-native OptInMultiMod_Unregister();
+native OptInMultiMod_Unregister(const String:name[]);
 
 // You should NEVER require this plugin
 public SharedPlugin:__pl_optin_multimod = 
