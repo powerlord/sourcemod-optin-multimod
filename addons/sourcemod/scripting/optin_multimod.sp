@@ -44,13 +44,16 @@ new EngineVersion:g_EngineVersion;
 
 new Handle:g_Cvar_Enabled;
 new Handle:g_Cvar_Mode;
+new Handle:g_Cvar_Frequency;
 new Handle:g_Cvar_UseNativeVotes;
 new Handle:g_Cvar_WaitingForPlayersTime;
+new Handle:g_Cvar_BonusRoundTime;
 
 new Handle:g_Kv_Plugins;
 
 new bool:g_bLate;
 
+new Handle:g_Array_CurrentPlugins;
 
 enum
 {
@@ -83,11 +86,12 @@ public APLRes:AskPluginLoad2(Handle:myself, bool:late, String:error[], err_max)
 
 public OnPluginStart()
 {
-	CreateConVar("optinmultimod_version", VERSION, "Opt-in Multimod version", FCVAR_DONTRECORD|FCVAR_NOTIFY|FCVAR_PLUGIN);
-	g_Cvar_Enabled = CreateConVar("optinmultimod_enabled", "1", "Enable Opt-in MultiMod?", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
-	g_Cvar_Mode = CreateConVar("optinmultimod_mode", "1", "Opt-in MultiMod operating mode. See documentation for mode numbers.", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0);
-	g_Cvar_UseNativeVotes = CreateConVar("optinmultimod_nativevotes", "1", "Use NativeVotes for votes if available.  Only applies to TF2 (Valve broke it for CS:GO).", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0);
-	
+	CreateConVar("optin_multimod_version", VERSION, "Opt-in Multimod version", FCVAR_DONTRECORD|FCVAR_NOTIFY|FCVAR_PLUGIN);
+	g_Cvar_Enabled = CreateConVar("optin_multimod_enabled", "1", "Enable Opt-in MultiMod?", FCVAR_DONTRECORD|FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
+	g_Cvar_Mode = CreateConVar("optin_multimod_mode", "1", "Opt-in MultiMod operating mode. 0 = Random, 1 = Vote.", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
+	g_Cvar_Frequency = CreateConVar("optin_multimod_frequency", "1", "Opt-in MultiMod mode change timing. 0 = Per Map, 1 = Per Round.", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
+	g_Cvar_UseNativeVotes = CreateConVar("optin_multimod_nativevotes", "1", "Use NativeVotes for votes if available.  Only applies to TF2 (Valve broke it for CS:GO).", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0);
+
 	HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
 	HookEventEx("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
 	HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
@@ -99,7 +103,31 @@ public OnPluginStart()
 		g_Cvar_WaitingForPlayersTime = FindConVar("mp_warmuptime");
 	}
 	
+	g_Cvar_BonusRoundTime = FindConVar("mp_bonusroundtime");
+	if (g_Cvar_BonusRoundTime == INVALID_HANDLE)
+	{
+		g_Cvar_BonusRoundTime = FindConVar("dod_bonusroundtime");
+	}
+	
 	g_Kv_Plugins = CreateKeyValues("MultiMod");
+	g_Array_CurrentPlugins = CreateArray(ByteCountToCells(64));
+	AutoExecConfig(true, "optin_multimod.phrases");
+	LoadTranslations("optin_multimod");
+}
+
+public OnConfigsExecuted()
+{
+	if (g_Cvar_BonusRoundTime != INVALID_HANDLE)
+	{
+		new time = GetConVarInt(g_Cvar_BonusRoundTime);
+		new String:timeDefaultString[3];
+		GetConVarDefault(g_Cvar_BonusRoundTime, timeDefaultString, sizeof(timeDefaultString));
+		new timeDefault = StringToInt(timeDefaultString);
+		if (timeDefault < time)
+		{
+			ResetConVar(g_Cvar_BonusRoundTime);
+		}
+	}
 }
 
 public OnAllPluginsLoaded()
@@ -138,6 +166,12 @@ public OnMapStart()
 	strcopy(g_CurrentMode, sizeof(g_CurrentMode), g_NextMode);
 	g_NextMode = "\0";
 	g_bEndOfMapVoteFinished = false;
+	
+	if (g_Array_CurrentPlugins != INVALID_HANDLE)
+	{
+		CloseHandle(g_Array_CurrentPlugins);
+		g_Array_CurrentPlugins = INVALID_HANDLE;
+	}
 }
 
 public OnMapEnd()
@@ -146,6 +180,45 @@ public OnMapEnd()
 	{
 		SetConVarInt(g_Cvar_WaitingForPlayersTime, 60);
 	}
+}
+
+Handle:CheckMap(const String:map[])
+{
+	KvRewind(g_Kv_Plugins);
+	
+	if (!KvGotoFirstSubKey(g_Kv_Plugins))
+	{
+		return INVALID_HANDLE;
+	}
+
+	new Handle:array_PluginNames = CreateArray(ByteCountToCells(64));
+	
+	do
+	{
+		new Handle:validateMap = Handle:KvGetNum(g_Kv_Plugins, "validateMap", _:INVALID_HANDLE);
+		
+		if (validateMap == INVALID_HANDLE || GetForwardFunctionCount(validateMap) == 0)
+		{
+			continue;
+		}
+		
+		new bool:result = false;
+		
+		Call_StartForward(validateMap);
+		Call_PushString(map);
+		Call_Finish(result);
+		
+		if (result)
+		{
+			new String:name[64];
+			KvGetSectionName(g_Kv_Plugins, name, sizeof(name));
+			
+			PushArrayString(g_Array_CurrentPlugins, name);
+		}
+		
+	} while (KvGotoNextKey(g_Kv_Plugins));
+	
+	return array_PluginNames;
 }
 
 // This is a pre-hook just so that we get called before any other plugins do.
@@ -164,12 +237,7 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 	{
 	}
 	g_bFirstRound = false;
-	return Plugin_Continue;
-}
 
-// nocopy because we don't care who wins
-public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
-{
 	if (!g_bEndOfMapVoteFinished && g_bMapChooser && EndOfMapVoteEnabled() && HasEndOfMapVoteFinished())
 	{
 		new String:map[PLATFORM_MAX_PATH];
@@ -178,6 +246,13 @@ public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 		SharedMapLogic(map);
 		//TODO Do something with the next map
 	}
+	
+	return Plugin_Continue;
+}
+
+// nocopy because we don't care who wins
+public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
+{
 }
 
 public UMC_OnNextmapSet(Handle:kv, const String:map[], const String:group[], const String:display[])
@@ -197,22 +272,136 @@ SharedMapLogic(const String:map[])
 	new modes = GetConVarInt(g_Cvar_Mode);
 	if (modes & MultiModMode_VoteMap || modes & MultiModMode_VoteRound)
 	{
-		new Handle:validPlugins = CreateArray(ByteCountToCells(PLATFORM_MAX_PATH));
-		
-		// Iterate over plugins
+		new Handle:validPlugins = CheckMap(map);
 		
 		if (GetArraySize(validPlugins) == 0)
 		{
 			return;
 		}
 		
-		if (g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes) && NativeVotes_IsVoteTypeSupported(NativeVotesType_Custom_Mult) &&
-			GetArraySize(validPlugins) <= NativeVotes_GetMaxItems())
+		PrepareVote(validPlugins, 15);
+	}
+}
+
+PrepareVote(Handle:validPlugins, time, bool:nextMap = false)
+{
+	new size = GetArraySize(validPlugins);
+	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes) && NativeVotes_IsVoteTypeSupported(NativeVotesType_Custom_Mult) &&
+		size <= NativeVotes_GetMaxItems();
+	
+	new Handle:vote;
+	
+	new Function:voteHandler;
+	new String:voteTitle[128];
+	
+	if (nextMap)
+	{
+		voteHandler = VoteHandlerNextMap;
+		Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextMap", LANG_SERVER);
+	}
+	else
+	{
+		voteHandler = VoteHandlerNextRound;
+		Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextRound", LANG_SERVER);
+	}
+	
+	if (useNativeVotes)
+	{
+		vote = NativeVotes_Create(voteHandler, NativeVotesType_Custom_Mult);
+		NativeVotes_SetDetails(vote, voteTitle);
+	}
+	else
+	{
+		vote = CreateMenu(voteHandler, MENU_ACTIONS_DEFAULT|MenuAction_Display|MenuAction_VoteEnd);
+		SetMenuTitle(vote, "%s", voteTitle);
+	}
+	
+	for (new i = 0; i < size; ++i)
+	{
+		new String:pluginName[64];
+		GetArrayString(validPlugins, i, pluginName, sizeof(pluginName));
+		
+		if (useNativeVotes)
 		{
-			new supportedTypes[NativeVotes_GetMaxItems()];
+			NativeVotes_AddItem(vote, pluginName, pluginName);
 		}
 		else
 		{
+			AddMenuItem(vote, pluginName, pluginName);
+		}
+	}
+	
+	if (useNativeVotes)
+	{
+		NativeVotes_DisplayToAll(vote, time);
+	}
+	else
+	{
+		VoteMenuToAll(vote, time);
+	}
+}
+
+public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
+{
+	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes);
+
+	switch (action)
+	{
+		// Only call this for non-NativeVotes
+		case MenuAction_Display:
+		{
+			new String:voteTitle[128];
+			Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextMap", param1);
+			SetPanelTitle(Handle:param2, voteTitle);
+		}
+		
+		case MenuAction_End:
+		{
+			CloseHandle(menu);
+		}
+		
+		case MenuAction_VoteCancel:
+		{
+			
+		}
+		
+		case MenuAction_VoteEnd:
+		{
+			new String:winner[64];
+			if (useNativeVotes)
+			{
+				NativeVotes_GetItem(menu, param1, winner, sizeof(winner));
+				
+			}
+			else
+			{
+				GetMenuItem(menu, param1, winner, sizeof(winner));
+			}
+			
+			
+			
+			PrintHintTextToAll("%t", "Vote Win", winner);
+		}
+	}
+}
+
+public VoteHandlerNextRound(Handle:menu, MenuAction:action, param1, param2)
+{
+	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes);
+
+	switch (action)
+	{
+		// Only call this for non-NativeVotes
+		case MenuAction_Display:
+		{
+			new String:voteTitle[128];
+			Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextRound", param1);
+			SetPanelTitle(Handle:param2, voteTitle);
+		}
+		
+		case MenuAction_End:
+		{
+			CloseHandle(menu);
 		}
 	}
 }
