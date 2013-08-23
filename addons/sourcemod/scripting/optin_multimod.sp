@@ -31,6 +31,9 @@
 
 #define VERSION "1.0.0"
 
+#define STATUS_FORWARD "statusChanged"
+#define VALIDATE_FORWARD "validateMap"
+
 new bool:g_bNativeVotes;
 new bool:g_bMapChooser;
 
@@ -57,10 +60,14 @@ new Handle:g_Array_CurrentPlugins;
 
 enum
 {
-	MultiModMode_RandomMap = (1<<0), /**< Choose a random mode when the map starts.  If used with vote modes, only applies to first round */
-	MultiModMode_RandomRound = (1<<1), /**< Choose a random mode each time the round starts */
-	MultiModMode_VoteMap = (1<<2), /**< Vote for the mode at the start of each map.  */
-	MultiModMode_VoteRound = (1<<3), /**< Vote for the mode after a round ends.  */
+	Mode_Random,
+	Mode_Vote,
+}
+
+enum
+{
+	Frequency_Map,
+	Frequency_Round,
 }
 
 public Plugin:myinfo = 
@@ -74,7 +81,8 @@ public Plugin:myinfo =
 
 public APLRes:AskPluginLoad2(Handle:myself, bool:late, String:error[], err_max)
 {
-	g_EngineVersion = GetEngineVersion();
+	MarkNativeAsOptional("GetEngineVersion");
+	g_EngineVersion = GetEngineVersionCompat();
 	g_bLate = late;
 	
 	CreateNative("OptInMultiMod_Register", Native_Register);
@@ -200,7 +208,7 @@ Handle:CheckMap(const String:map[])
 	
 	do
 	{
-		new Handle:validateMap = Handle:KvGetNum(g_Kv_Plugins, "validateMap", _:INVALID_HANDLE);
+		new Handle:validateMap = Handle:KvGetNum(g_Kv_Plugins, VALIDATE_FORWARD, _:INVALID_HANDLE);
 		
 		if (validateMap == INVALID_HANDLE || GetForwardFunctionCount(validateMap) == 0)
 		{
@@ -249,7 +257,7 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 	{
 		if (KvJumpToKey(g_Kv_Plugins, g_CurrentMode))
 		{
-			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, "statusChanged", _:INVALID_HANDLE);
+			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
 			if (statusForward != INVALID_HANDLE)
 			{
 				Call_StartForward(statusForward);
@@ -266,7 +274,7 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 		return Plugin_Continue;
 	}
 	
-	new Handle:newStatusForward = Handle:KvGetNum(g_Kv_Plugins, "statusChanged", _:INVALID_HANDLE);
+	new Handle:newStatusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
 	if (newStatusForward == INVALID_HANDLE)
 	{
 		LogError("Could not find Status Changed forward for mode: %s", g_NextMode);
@@ -287,7 +295,7 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 		new String:map[PLATFORM_MAX_PATH];
 		GetNextMap(map, PLATFORM_MAX_PATH);
 		
-		SharedMapLogic(map);
+		SharedEndMapLogic(map);
 		g_bEndOfMapVoteFinished = true;
 	}
 	
@@ -312,20 +320,20 @@ public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 
 public UMC_OnNextmapSet(Handle:kv, const String:map[], const String:group[], const String:display[])
 {
-	SharedMapLogic(map);
+	SharedEndMapLogic(map);
 	g_bEndOfMapVoteFinished = true;
 }
 
 public OnMapVoteEnd(const String:map[])
 {
-	SharedMapLogic(map);
+	SharedEndMapLogic(map);
 	g_bEndOfMapVoteFinished = true;
 }
 
-SharedMapLogic(const String:map[])
+SharedEndMapLogic(const String:map[])
 {
 	new modes = GetConVarInt(g_Cvar_Mode);
-	if (modes & MultiModMode_VoteMap || modes & MultiModMode_VoteRound)
+	if (modes == Mode_Vote)
 	{
 		new Handle:validPlugins = CheckMap(map);
 		
@@ -352,7 +360,25 @@ PrepareVote(Handle:validPlugins, time, bool:nextMap = false)
 	if (nextMap)
 	{
 		voteHandler = VoteHandlerNextMap;
-		Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextMap", LANG_SERVER);
+		new frequency = GetConVarInt(g_Cvar_Frequency);
+		switch (frequency)
+		{
+			case Frequency_Map:
+			{
+				Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextMap", LANG_SERVER);
+			}
+			
+			case Frequency_Round:
+			{
+				Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextMap FirstRound", LANG_SERVER);
+			}
+			
+			default:
+			{
+				// In case we add more frequencies later
+				return;
+			}
+		}
 	}
 	else
 	{
@@ -406,6 +432,26 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 		case MenuAction_Display:
 		{
 			new String:voteTitle[128];
+			new frequency = GetConVarInt(g_Cvar_Frequency);
+			
+			switch (frequency)
+			{
+				case Frequency_Map:
+				{
+					Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextMap", LANG_SERVER);
+				}
+				
+				case Frequency_Round:
+				{
+					Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextMap FirstRound", LANG_SERVER);
+				}
+				
+				default:
+				{
+					return;
+				}
+			}
+			
 			Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextMap", param1);
 			SetPanelTitle(Handle:param2, voteTitle);
 		}
@@ -443,9 +489,24 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 				GetMenuItem(menu, param1, winner, sizeof(winner));
 			}
 			
+			new String:translationPhrase[64];
 			
+			new frequency = GetConVarInt(g_Cvar_Frequency);
 			
-			PrintHintTextToAll("%t", "Vote Win NextMap", winner);
+			switch (frequency)
+			{
+				case Frequency_Map:
+				{
+					translationPhrase = "Vote Win NextMap";
+				}
+				
+				case Frequency_Round:
+				{
+					translationPhrase = "Vote Win NextMap FirstRound";
+				}
+			}
+			
+			PrintHintTextToAll("%t", translationPhrase, winner);
 		}
 	}
 }
@@ -546,8 +607,8 @@ AddPlugin(Handle:plugin, const String:name[], Function:validateMap, Function:sta
 	
 	KvJumpToKey(g_Kv_Plugins, name, true); // Find or create this key
 
-	validateForward = Handle:KvGetNum(g_Kv_Plugins, "validateMap", _:INVALID_HANDLE);
-	statusForward = Handle:KvGetNum(g_Kv_Plugins, "statusChanged", _:INVALID_HANDLE);
+	validateForward = Handle:KvGetNum(g_Kv_Plugins, VALIDATE_FORWARD, _:INVALID_HANDLE);
+	statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
 
 	if (validateForward != INVALID_HANDLE && statusForward == INVALID_HANDLE)
 	{
@@ -590,13 +651,13 @@ AddPlugin(Handle:plugin, const String:name[], Function:validateMap, Function:sta
 	if (validateForward == INVALID_HANDLE)
 	{
 		validateForward = CreateForward(ET_Single, Param_String);
-		KvSetNum(g_Kv_Plugins, "validateMap", _:validateForward);
+		KvSetNum(g_Kv_Plugins, VALIDATE_FORWARD, _:validateForward);
 	}
 	
 	if (statusForward == INVALID_HANDLE)
 	{
 		statusForward = CreateForward(ET_Ignore, Param_Cell);
-		KvSetNum(g_Kv_Plugins, "statusChanged", _:statusForward);
+		KvSetNum(g_Kv_Plugins, STATUS_FORWARD, _:statusForward);
 	}
 	
 	AddToForward(validateForward, plugin, validateMap);
@@ -608,13 +669,13 @@ RemovePlugin(const String:name[])
 	KvRewind(g_Kv_Plugins);
 	if (KvJumpToKey(g_Kv_Plugins, name))
 	{
-		new Handle:validateForward = Handle:KvGetNum(g_Kv_Plugins, "validateMap", _:INVALID_HANDLE);
+		new Handle:validateForward = Handle:KvGetNum(g_Kv_Plugins, VALIDATE_FORWARD, _:INVALID_HANDLE);
 		if (validateForward != INVALID_HANDLE)
 		{
 			CloseHandle(validateForward);
 		}
 		
-		new Handle:statusChanged = Handle:KvGetNum(g_Kv_Plugins, "statusChanged", _:INVALID_HANDLE);
+		new Handle:statusChanged = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
 		if (statusChanged != INVALID_HANDLE)
 		{
 			CloseHandle(statusChanged);
@@ -623,4 +684,110 @@ RemovePlugin(const String:name[])
 		KvDeleteThis(g_Kv_Plugins);
 		KvRewind(g_Kv_Plugins);
 	}
+}
+
+// Using this stock REQUIRES you to add the following to AskPluginLoad2:
+// MarkNativeAsOptional("GetEngineVersion");
+stock EngineVersion:GetEngineVersionCompat()
+{
+	new EngineVersion:version;
+	if (GetFeatureStatus(FeatureType_Native, "GetEngineVersion") != FeatureStatus_Available)
+	{
+		new sdkVersion = GuessSDKVersion();
+		switch (sdkVersion)
+		{
+			case SOURCE_SDK_ORIGINAL:
+			{
+				version = Engine_Original;
+			}
+			
+			case SOURCE_SDK_DARKMESSIAH:
+			{
+				version = Engine_DarkMessiah;
+			}
+			
+			case SOURCE_SDK_EPISODE1:
+			{
+				version = Engine_SourceSDK2006;
+			}
+			
+			case SOURCE_SDK_EPISODE2:
+			{
+				version = Engine_SourceSDK2007;
+			}
+			
+			case SOURCE_SDK_BLOODYGOODTIME:
+			{
+				version = Engine_BloodyGoodTime;
+			}
+			
+			case SOURCE_SDK_EYE:
+			{
+				version = Engine_EYE;
+			}
+			
+			case SOURCE_SDK_CSS:
+			{
+				version = Engine_CSS;
+			}
+			
+			case SOURCE_SDK_EPISODE2VALVE:
+			{
+				decl String:gameFolder[8];
+				GetGameFolderName(gameFolder, PLATFORM_MAX_PATH);
+				if (StrEqual(gameFolder, "dod", false))
+				{
+					version = Engine_DODS;
+				}
+				else if (StrEqual(gameFolder, "hl2mp", false))
+				{
+					version = Engine_HL2DM;
+				}
+				else
+				{
+					version = Engine_TF2;
+				}
+			}
+			
+			case SOURCE_SDK_LEFT4DEAD:
+			{
+				version = Engine_Left4Dead;
+			}
+			
+			case SOURCE_SDK_LEFT4DEAD2:
+			{
+				decl String:gameFolder[8];
+				GetGameFolderName(gameFolder, PLATFORM_MAX_PATH);
+				if (StrEqual(gameFolder, "nd", false))
+				{
+					version = Engine_NuclearDawn;
+				}
+				else
+				{
+					version = Engine_Left4Dead2;
+				}
+			}
+			
+			case SOURCE_SDK_ALIENSWARM:
+			{
+				version = Engine_AlienSwarm;
+			}
+			
+			case SOURCE_SDK_CSGO:
+			{
+				version = Engine_CSGO;
+			}
+			
+			default:
+			{
+				version = Engine_Unknown;
+			}
+		}
+	}
+	else
+	{
+		version = GetEngineVersion();
+	}
+	
+	return version;
 }
