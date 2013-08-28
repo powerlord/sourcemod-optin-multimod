@@ -40,8 +40,8 @@ new bool:g_bMapChooser;
 new bool:g_bEndOfMapVoteFinished = false;
 new bool:g_bFirstRound;
 
-new String:g_CurrentMode[64] = "\0";
-new String:g_NextMode[64] = "\0";
+new String:g_CurrentMode[64];
+new String:g_NextMode[64];
 
 new EngineVersion:g_EngineVersion;
 
@@ -49,7 +49,6 @@ new Handle:g_Cvar_Enabled;
 new Handle:g_Cvar_Mode;
 new Handle:g_Cvar_Frequency;
 new Handle:g_Cvar_UseNativeVotes;
-new Handle:g_Cvar_WaitingForPlayersTime;
 new Handle:g_Cvar_BonusRoundTime;
 
 new Handle:g_Kv_Plugins;
@@ -106,16 +105,22 @@ public OnPluginStart()
 	HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
 	HookEventEx("teamplay_round_win", Event_RoundEnd, EventHookMode_PostNoCopy);
 	
-	g_Cvar_WaitingForPlayersTime = FindConVar("mp_waitingforplayers_time");
-	if (g_Cvar_WaitingForPlayersTime == INVALID_HANDLE)
+	switch (g_EngineVersion)
 	{
-		g_Cvar_WaitingForPlayersTime = FindConVar("mp_warmuptime");
-	}
-	
-	g_Cvar_BonusRoundTime = FindConVar("mp_bonusroundtime");
-	if (g_Cvar_BonusRoundTime == INVALID_HANDLE)
-	{
-		g_Cvar_BonusRoundTime = FindConVar("dod_bonusroundtime");
+		case Engine_CSS, Engine_CSGO:
+		{
+			g_Cvar_BonusRoundTime = FindConVar("mp_round_restart_delay");
+		}
+		
+		case Engine_DODS:
+		{
+			g_Cvar_BonusRoundTime = FindConVar("dod_bonusroundtime");
+		}
+		
+		default:
+		{
+			g_Cvar_BonusRoundTime = FindConVar("mp_bonusroundtime");
+		}
 	}
 	
 	g_Kv_Plugins = CreateKeyValues("MultiMod");
@@ -184,14 +189,6 @@ public OnMapStart()
 	{
 		CloseHandle(g_Array_CurrentPlugins);
 		g_Array_CurrentPlugins = INVALID_HANDLE;
-	}
-}
-
-public OnMapEnd()
-{
-	if (g_Cvar_WaitingForPlayersTime != INVALID_HANDLE)
-	{
-		SetConVarInt(g_Cvar_WaitingForPlayersTime, 60);
 	}
 }
 
