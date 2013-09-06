@@ -23,9 +23,6 @@
 #include <sourcemod>
 #undef REQUIRE_PLUGIN
 #include <nativevotes>
-#include <umc-core>
-#include <mapchooser_extended>
-#include <mapchooser>
 
 #pragma semicolon 1
 
@@ -38,9 +35,7 @@
 #define MEDIEVAL "#medieval#"
 
 new bool:g_bNativeVotes;
-new bool:g_bMapChooser;
 
-new bool:g_bEndOfMapVoteFinished = false;
 new bool:g_bFirstRound;
 
 new String:g_CurrentMode[64];
@@ -73,6 +68,9 @@ new bool:g_bLate;
 new Handle:g_Array_CurrentPlugins;
 
 new Handle:g_hMapPrefixes;
+
+new Handle:g_hRetryTimer = INVALID_HANDLE;
+new bool:g_bMapEnded = false;
 
 enum
 {
@@ -136,7 +134,6 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "de");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
-			HookEvent("cs_win_panel_match", Event_GameEnd, EventHookMode_PostNoCopy);
 		}
 		
 		case Engine_CSGO:
@@ -147,8 +144,6 @@ public OnPluginStart()
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
 			g_Cvar_MatchClinch = FindConVar("mp_match_can_clinch");
-			
-			HookEvent("cs_win_panel_match", Event_GameEnd, EventHookMode_PostNoCopy);
 		}
 		
 		case Engine_DODS:
@@ -156,7 +151,6 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "dod");
 			
 			g_Cvar_Bonusroundtime = FindConVar("dod_bonusroundtime");
-			HookEvent("dod_game_over", Event_GameEnd, EventHookMode_PostNoCopy);
 		}
 		
 		case Engine_HL2DM:
@@ -164,7 +158,6 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "dm");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
-			HookEvent("game_end", Event_GameEnd, EventHookMode_PostNoCopy);
 			HookEventEx("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
 		}
 		
@@ -182,7 +175,6 @@ public OnPluginStart()
 			
 			g_Cvar_Medieval = FindConVar("tf_medieval");
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
-			HookEvent("tf_game_over", Event_GameEnd, EventHookMode_PostNoCopy);
 			HookEventEx("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
 			HookEventEx("teamplay_round_win", Event_RoundEnd, EventHookMode_PostNoCopy);
 		}
@@ -190,7 +182,6 @@ public OnPluginStart()
 		default:
 		{
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
-			HookEvent("game_end", Event_GameEnd, EventHookMode_PostNoCopy);
 		}
 	}
 	
@@ -222,7 +213,6 @@ public OnConfigsExecuted()
 
 public OnAllPluginsLoaded()
 {
-	g_bMapChooser = LibraryExists("mapchooser");
 	g_bNativeVotes = LibraryExists("nativevotes") && NativeVotes_IsVoteTypeSupported(NativeVotesType_Custom_Mult);
 }
 
@@ -232,11 +222,6 @@ public OnLibraryAdded(const String:name[])
 	{
 		g_bNativeVotes = true;
 	}
-	else
-	if (StrEqual(name, "mapchooser", false))
-	{
-		g_bMapChooser = true;
-	}
 }
 
 public OnLibraryRemoved(const String:name[])
@@ -245,19 +230,14 @@ public OnLibraryRemoved(const String:name[])
 	{
 		g_bNativeVotes = false;
 	}
-	else
-	if (StrEqual(name, "mapchooser", false))
-	{
-		g_bMapChooser = false;
-	}
 }
 
 public OnMapStart()
 {
+	g_bMapEnded = false;
 	g_bFirstRound = true;
 	strcopy(g_CurrentMode, sizeof(g_CurrentMode), g_NextMode);
 	g_NextMode[0] = '\0';
-	g_bEndOfMapVoteFinished = false;
 	
 	if (g_Array_CurrentPlugins != INVALID_HANDLE)
 	{
@@ -267,7 +247,7 @@ public OnMapStart()
 	
 	new String:map[PLATFORM_MAX_PATH];
 	GetCurrentMap(map, PLATFORM_MAX_PATH);
-	g_Array_CurrentPlugins = CheckMap(map);
+	g_Array_CurrentPlugins = GetMapPlugins(map);
 
 }
 
@@ -284,10 +264,14 @@ public OnMapEnd()
 		SetConVarBool(g_Cvar_Medieval, true);
 		g_bNextMapMedieval = false;
 	}
+	if (g_hRetryTimer != INVALID_HANDLE)
+	{
+		g_bMapEnded = true;
+		TriggerTimer(g_hRetryTimer);
+	}
 }
 
 // Stuff to track when the map will end
-
 
 
 public CvarNextMap(Handle:convar, const String:oldValue[], const String:newValue[])
@@ -298,9 +282,10 @@ public CvarNextMap(Handle:convar, const String:oldValue[], const String:newValue
 	}
 	
 	// Do votey and decidey stuff here
+	SharedEndMapLogic(newValue);
 }
 
-Handle:CheckMap(const String:map[])
+Handle:GetMapPlugins(const String:map[])
 {
 	KvRewind(g_Kv_Plugins);
 	
@@ -418,66 +403,29 @@ public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 		return;
 	}
 
-	if (GetConVarInt(g_Cvar_Mode) == Mode_Random)
+	new mode = GetConVarInt(g_Cvar_Mode);
+	switch (mode)
 	{
-		ChooseRandomMode(g_Array_CurrentPlugins, g_NextMode, sizeof(g_NextMode));
-	}
-	
-	if (!g_bEndOfMapVoteFinished && g_bMapChooser && EndOfMapVoteEnabled() && HasEndOfMapVoteFinished())
-	{
-		new String:map[PLATFORM_MAX_PATH];
-		GetNextMap(map, PLATFORM_MAX_PATH);
+		case Mode_Random:
+		{
+			ChooseRandomMode(g_Array_CurrentPlugins, g_NextMode, sizeof(g_NextMode));
+		}
 		
-		SharedEndMapLogic(map);
-		g_bEndOfMapVoteFinished = true;
-	}
-}
-
-// This will probably be removed
-public Event_GameEnd(Handle:event, const String:name[], bool:dontBroadcast)
-{
-	if (!GetConVarBool(g_Cvar_Enabled))
-	{
-		return;
-	}
-	
-	new String:map[PLATFORM_MAX_PATH];
-	GetNextMap(map, PLATFORM_MAX_PATH);
-	new Handle:validPlugins = CheckMap(map);
-
-	new modes = GetConVarInt(g_Cvar_Mode);
-
-	if (modes == Mode_Random)
-	{
-		ChooseRandomMode(validPlugins, g_NextMode, sizeof(g_NextMode));
-	}
-	
-	if (modes == Mode_Vote)
-	{
-		new time;
-		if (g_Cvar_ChatTime == INVALID_HANDLE)
+		case Mode_Vote:
 		{
-			time = 8;
+			new time = GetConVarInt(g_Cvar_Bonusroundtime) - 2;
+			new String:map[PLATFORM_MAX_PATH];
+			GetCurrentMap(map, PLATFORM_MAX_PATH);
+			PrepareVote(map, CloneHandle(g_Array_CurrentPlugins), time);
 		}
-		else
+		
+		default:
 		{
-			time = GetConVarInt(g_Cvar_ChatTime) - 2;
+			return;
 		}
+		
 	}
-
 	
-}
-
-public UMC_OnNextmapSet(Handle:kv, const String:map[], const String:group[], const String:display[])
-{
-	SharedEndMapLogic(map);
-	g_bEndOfMapVoteFinished = true;
-}
-
-public OnMapVoteEnd(const String:map[])
-{
-	SharedEndMapLogic(map);
-	g_bEndOfMapVoteFinished = true;
 }
 
 SharedEndMapLogic(const String:map[])
@@ -485,7 +433,7 @@ SharedEndMapLogic(const String:map[])
 	new modes = GetConVarInt(g_Cvar_Mode);
 	if (modes == Mode_Vote)
 	{
-		new Handle:validPlugins = CheckMap(map);
+		new Handle:validPlugins = GetMapPlugins(map);
 		
 		if (GetArraySize(validPlugins) == 0)
 		{
@@ -498,6 +446,24 @@ SharedEndMapLogic(const String:map[])
 
 PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 {
+	// This array WILL be closed by this function
+	new size = GetArraySize(validPlugins);
+
+	// NativeVotes only supports up to 5 slots on TF2
+	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes) && size <= NativeVotes_GetMaxItems();
+
+	if ((useNativeVotes && NativeVotes_IsVoteInProgress()) || (!useNativeVotes && IsVoteInProgress()))
+	{
+		// Retry since a vote is currently active
+		new Handle:data;
+		g_hRetryTimer = CreateDataTimer(5.0, Timer_RetryVote, data, TIMER_FLAG_NO_MAPCHANGE);
+		WritePackCell(data, _:validPlugins);
+		WritePackString(data, map);
+		WritePackCell(data, time);
+		WritePackCell(data, _:nextMap);
+		ResetPack(data);
+	}
+	
 	new Handle:vote;
 	
 	new Function:voteHandler;
@@ -536,12 +502,6 @@ PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 		PushArrayString(validPlugins, STANDARD);
 	}
 
-	// This array WILL be closed by this function
-	new size = GetArraySize(validPlugins);
-
-	// NativeVotes only supports up to 5 slots on TF2
-	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes) && size <= NativeVotes_GetMaxItems();
-
 	if (useNativeVotes)
 	{
 		vote = NativeVotes_Create(voteHandler, NativeVotesType_Custom_Mult, NATIVEVOTES_ACTIONS_DEFAULT|MenuAction_Display|MenuAction_DisplayItem);
@@ -579,6 +539,24 @@ PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 	{
 		VoteMenuToAll(vote, time);
 	}
+}
+
+public Action:Timer_RetryVote(Handle:timer, Handle:data)
+{
+	new Handle:validPlugins = Handle:ReadPackCell(data);
+	g_hRetryTimer = INVALID_HANDLE;
+	if (g_bMapEnded)
+	{
+		CloseHandle(validPlugins);
+		return Plugin_Stop;
+	}
+	
+	new String:map[PLATFORM_MAX_PATH];
+	ReadPackString(data, map, PLATFORM_MAX_PATH);
+	new time = ReadPackCell(data);
+	new bool:nextMap = bool:ReadPackCell(data);
+	PrepareVote(map, validPlugins, time, nextMap);
+	return Plugin_Continue;
 }
 
 public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
