@@ -56,9 +56,13 @@ new Handle:g_Cvar_MedievalAvailable;
 new Handle:g_Cvar_StandardAvailable;
 
 // Valve Cvars
-new Handle:g_Cvar_BonusRoundTime;
+new Handle:g_Cvar_Bonusroundtime;
 new Handle:g_Cvar_ChatTime;
 new Handle:g_Cvar_Medieval;
+new Handle:g_Cvar_Winlimit;
+new Handle:g_Cvar_Maxrounds;
+new Handle:g_Cvar_Fraglimit;
+new Handle:g_Cvar_MatchClinch;
 
 new bool:g_bNextMapMedieval;
 
@@ -131,7 +135,7 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "cs");
 			PushArrayString(g_hMapPrefixes, "de");
 			
-			g_Cvar_BonusRoundTime = FindConVar("mp_round_restart_delay");
+			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
 			HookEvent("cs_win_panel_match", Event_GameEnd, EventHookMode_PostNoCopy);
 		}
 		
@@ -141,7 +145,9 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "cs");
 			PushArrayString(g_hMapPrefixes, "de");
 			
-			g_Cvar_BonusRoundTime = FindConVar("mp_round_restart_delay");
+			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
+			g_Cvar_MatchClinch = FindConVar("mp_match_can_clinch");
+			
 			HookEvent("cs_win_panel_match", Event_GameEnd, EventHookMode_PostNoCopy);
 		}
 		
@@ -149,7 +155,7 @@ public OnPluginStart()
 		{
 			PushArrayString(g_hMapPrefixes, "dod");
 			
-			g_Cvar_BonusRoundTime = FindConVar("dod_bonusroundtime");
+			g_Cvar_Bonusroundtime = FindConVar("dod_bonusroundtime");
 			HookEvent("dod_game_over", Event_GameEnd, EventHookMode_PostNoCopy);
 		}
 		
@@ -157,7 +163,7 @@ public OnPluginStart()
 		{
 			PushArrayString(g_hMapPrefixes, "dm");
 			
-			g_Cvar_BonusRoundTime = FindConVar("mp_bonusroundtime");
+			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
 			HookEvent("game_end", Event_GameEnd, EventHookMode_PostNoCopy);
 			HookEventEx("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
 		}
@@ -175,7 +181,7 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "mvm");
 			
 			g_Cvar_Medieval = FindConVar("tf_medieval");
-			g_Cvar_BonusRoundTime = FindConVar("mp_bonusroundtime");
+			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
 			HookEvent("tf_game_over", Event_GameEnd, EventHookMode_PostNoCopy);
 			HookEventEx("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
 			HookEventEx("teamplay_round_win", Event_RoundEnd, EventHookMode_PostNoCopy);
@@ -183,10 +189,15 @@ public OnPluginStart()
 		
 		default:
 		{
-			g_Cvar_BonusRoundTime = FindConVar("mp_bonusroundtime");
+			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
 			HookEvent("game_end", Event_GameEnd, EventHookMode_PostNoCopy);
 		}
 	}
+	
+	g_Cvar_Winlimit = FindConVar("mp_winlimit");
+	g_Cvar_Maxrounds = FindConVar("mp_maxrounds");
+	g_Cvar_Fraglimit = FindConVar("mp_fraglimit");
+	
 	
 	g_Kv_Plugins = CreateKeyValues("MultiMod");
 	//g_Array_CurrentPlugins = CreateArray(ByteCountToCells(64));
@@ -196,15 +207,15 @@ public OnPluginStart()
 
 public OnConfigsExecuted()
 {
-	if (g_Cvar_BonusRoundTime != INVALID_HANDLE)
+	if (g_Cvar_Bonusroundtime != INVALID_HANDLE)
 	{
-		new time = GetConVarInt(g_Cvar_BonusRoundTime);
+		new time = GetConVarInt(g_Cvar_Bonusroundtime);
 		new String:timeDefaultString[3];
-		GetConVarDefault(g_Cvar_BonusRoundTime, timeDefaultString, sizeof(timeDefaultString));
+		GetConVarDefault(g_Cvar_Bonusroundtime, timeDefaultString, sizeof(timeDefaultString));
 		new timeDefault = StringToInt(timeDefaultString);
 		if (timeDefault < time)
 		{
-			ResetConVar(g_Cvar_BonusRoundTime);
+			ResetConVar(g_Cvar_Bonusroundtime);
 		}
 	}
 }
@@ -274,6 +285,10 @@ public OnMapEnd()
 		g_bNextMapMedieval = false;
 	}
 }
+
+// Stuff to track when the map will end
+
+
 
 public CvarNextMap(Handle:convar, const String:oldValue[], const String:newValue[])
 {
@@ -418,15 +433,12 @@ public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 	}
 }
 
+// This will probably be removed
 public Event_GameEnd(Handle:event, const String:name[], bool:dontBroadcast)
 {
 	if (!GetConVarBool(g_Cvar_Enabled))
 	{
 		return;
-	}
-	
-	if (g_Cvar_ChatTime == INVALID_HANDLE)
-	{
 	}
 	
 	new String:map[PLATFORM_MAX_PATH];
@@ -442,8 +454,18 @@ public Event_GameEnd(Handle:event, const String:name[], bool:dontBroadcast)
 	
 	if (modes == Mode_Vote)
 	{
-		
+		new time;
+		if (g_Cvar_ChatTime == INVALID_HANDLE)
+		{
+			time = 8;
+		}
+		else
+		{
+			time = GetConVarInt(g_Cvar_ChatTime) - 2;
+		}
 	}
+
+	
 }
 
 public UMC_OnNextmapSet(Handle:kv, const String:map[], const String:group[], const String:display[])
