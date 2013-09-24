@@ -26,13 +26,13 @@
 
 #pragma semicolon 1
 
-#define VERSION "1.0.0"
+#define VERSION "1.0.0 alpha"
 
 #define STATUS_FORWARD "statusChanged"
 #define VALIDATE_FORWARD "validateMap"
 
-#define STANDARD "#standard#"
-#define MEDIEVAL "#medieval#"
+#define STANDARD "OIMM Standard"
+#define MEDIEVAL "OIMM Medieval"
 
 new bool:g_bNativeVotes;
 
@@ -52,18 +52,11 @@ new Handle:g_Cvar_StandardAvailable;
 
 // Valve Cvars
 new Handle:g_Cvar_Bonusroundtime;
-new Handle:g_Cvar_ChatTime;
 new Handle:g_Cvar_Medieval;
-new Handle:g_Cvar_Winlimit;
-new Handle:g_Cvar_Maxrounds;
-new Handle:g_Cvar_Fraglimit;
-new Handle:g_Cvar_MatchClinch;
 
 new bool:g_bNextMapMedieval;
 
 new Handle:g_Kv_Plugins;
-
-new bool:g_bLate;
 
 new Handle:g_Array_CurrentPlugins;
 
@@ -96,7 +89,6 @@ public Plugin:myinfo =
 public APLRes:AskPluginLoad2(Handle:myself, bool:late, String:error[], err_max)
 {
 	g_EngineVersion = GetEngineVersion();
-	g_bLate = late;
 	
 	CreateNative("OptInMultiMod_Register", Native_Register);
 	CreateNative("OptInMultiMod_Unregister", Native_Unregister);
@@ -119,7 +111,6 @@ public OnPluginStart()
 	HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
 	HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
 	
-	g_Cvar_ChatTime = FindConVar("mp_chattime");
 	HookConVarChange(FindConVar("sm_nextmap"), CvarNextMap);
 
 	g_hMapPrefixes = CreateArray(ByteCountToCells(10));
@@ -143,7 +134,6 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "de");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
-			g_Cvar_MatchClinch = FindConVar("mp_match_can_clinch");
 		}
 		
 		case Engine_DODS:
@@ -185,15 +175,10 @@ public OnPluginStart()
 		}
 	}
 	
-	g_Cvar_Winlimit = FindConVar("mp_winlimit");
-	g_Cvar_Maxrounds = FindConVar("mp_maxrounds");
-	g_Cvar_Fraglimit = FindConVar("mp_fraglimit");
-	
-	
 	g_Kv_Plugins = CreateKeyValues("MultiMod");
 	//g_Array_CurrentPlugins = CreateArray(ByteCountToCells(64));
-	AutoExecConfig(true, "optin_multimod.phrases");
-	LoadTranslations("optin_multimod");
+	AutoExecConfig(true, "optin_multimod");
+	LoadTranslations("optin_multimod.phrases");
 }
 
 public OnConfigsExecuted()
@@ -271,8 +256,21 @@ public OnMapEnd()
 	}
 }
 
-// Stuff to track when the map will end
+public OnClientPutInServer(client)
+{
+	CreateTimer(15.0, Timer_CurrentRound, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+}
 
+public Action:Timer_CurrentRound(Handle:timer, any:userid)
+{
+	new client = GetClientOfUserId(userid);
+	if (client == 0)
+		return;
+	
+	PrintHintText(client, "%t", "OIMM Current Mode", g_CurrentMode);
+}
+
+// Stuff to track when the map will end
 
 public CvarNextMap(Handle:convar, const String:oldValue[], const String:newValue[])
 {
@@ -449,8 +447,23 @@ PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 	// This array WILL be closed by this function
 	new size = GetArraySize(validPlugins);
 
+	// No valid plugins and Medieval mode is off means no vote, default to standard
+	if (size == 0 && (g_EngineVersion != Engine_TF2 || !GetConVarBool(g_Cvar_MedievalAvailable)))
+	{
+		CloseHandle(validPlugins);
+		return;
+	}
+	
+	new slotsNeeded = size;
+	
+	if (GetConVarBool(g_Cvar_StandardAvailable))
+		slotsNeeded++;
+		
+	if (g_EngineVersion == Engine_TF2 && GetConVarBool(g_Cvar_MedievalAvailable))
+		slotsNeeded++;
+		
 	// NativeVotes only supports up to 5 slots on TF2
-	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes) && size <= NativeVotes_GetMaxItems();
+	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes) && slotsNeeded <= NativeVotes_GetMaxItems();
 
 	if ((useNativeVotes && NativeVotes_IsVoteInProgress()) || (!useNativeVotes && IsVoteInProgress()))
 	{
@@ -476,18 +489,18 @@ PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 	{
 		case Frequency_Map:
 		{
-			voteTitle = "Vote Mode NextMap";
+			voteTitle = "OIMM Vote Mode NextMap";
 		}
 		
 		case Frequency_Round:
 		{
 			if (nextMap)
 			{
-				voteTitle = "Vote Mode NextMap FirstRound";
+				voteTitle = "OIMM Vote Mode NextMap FirstRound";
 			}
 			else
 			{
-				voteTitle = "Vote Mode NextRound";
+				voteTitle = "OIMM Vote Mode NextRound";
 			}
 		}
 	}
@@ -512,6 +525,22 @@ PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 	{
 		vote = CreateMenu(voteHandler, MENU_ACTIONS_DEFAULT|MenuAction_Display|MenuAction_DisplayItem|MenuAction_VoteEnd);
 		SetMenuTitle(vote, "%s", voteTitle);
+	}
+	
+	if (GetConVarBool(g_Cvar_StandardAvailable))
+	{
+		new String:prefix[10];
+		SplitString(map, "_", prefix, sizeof(prefix));
+		
+		if (FindStringInArray(g_hMapPrefixes, prefix))
+		{
+			AddVoteItem(vote, useNativeVotes, STANDARD, "Standard");
+		}
+	}
+		
+	if (nextMap && g_EngineVersion == Engine_TF2 && GetConVarBool(g_Cvar_MedievalAvailable))
+	{
+		AddVoteItem(vote, useNativeVotes, MEDIEVAL, "Standard Medieval");
 	}
 	
 	// Fisher-Yates shuffle

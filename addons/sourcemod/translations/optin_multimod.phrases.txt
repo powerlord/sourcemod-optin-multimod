@@ -1,0 +1,45 @@
+"Phrases"
+{
+	"OIMM Standard"
+	{
+		"en"	"Standard"
+	}
+
+	"OIMM Medieval"
+	{
+		"en"	"Standard Medieval"
+	}
+
+	"OIMM Next Map Mode"
+	{
+		"#format"	"{1:s}"
+		"en"	"Next map's game mode is: {1}"
+	}
+
+	"OIMM Next Round Mode"
+	{
+		"#format"	"{1:s}"
+		"en"	"Next round's game mode is: {1}"
+	}
+
+	"OIMM Current Mode"
+	{
+		"#format"	"{1:s}"
+		"en"	"Current game mode is: {1}"
+	}
+
+	"OIMM Vote Mode NextMap"
+	{
+		"en"	"Mode for next map's game mode"
+	}
+
+	"OIMM Vote Mode NextMap FirstRound"
+	{
+		"en"	"Mode for next map's first round game mode"
+	}
+
+	"OIMM Vote Mode NextRound"
+	{
+		"en"	"Mode for next round's game mode"
+	}
+}
