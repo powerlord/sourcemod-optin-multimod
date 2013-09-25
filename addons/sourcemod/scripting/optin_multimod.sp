@@ -30,6 +30,7 @@
 
 #define STATUS_FORWARD "statusChanged"
 #define VALIDATE_FORWARD "validateMap"
+#define TRANSLATE_FORWARD "translateName"
 
 #define STANDARD "OIMM Standard"
 #define MEDIEVAL "OIMM Medieval"
@@ -112,6 +113,8 @@ public OnPluginStart()
 	HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
 	
 	HookConVarChange(FindConVar("sm_nextmap"), CvarNextMap);
+	
+	RegConsoleCmd("currentmode", Cmd_CurrentMode, "Show current mode");
 
 	g_hMapPrefixes = CreateArray(ByteCountToCells(10));
 	
@@ -256,6 +259,11 @@ public OnMapEnd()
 	}
 }
 
+public Action:Cmd_CurrentMode(client, args)
+{
+	CreateTimer(0.0, Timer_CurrentRound, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+}
+
 public OnClientPutInServer(client)
 {
 	CreateTimer(15.0, Timer_CurrentRound, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
@@ -267,7 +275,7 @@ public Action:Timer_CurrentRound(Handle:timer, any:userid)
 	if (client == 0)
 		return;
 	
-	PrintHintText(client, "%t", "OIMM Current Mode", g_CurrentMode);
+	ReplyToCommand(client, "%t", "OIMM Current Mode", g_CurrentMode);
 }
 
 // Stuff to track when the map will end
@@ -349,6 +357,7 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 				Call_PushCell(false);
 				Call_Finish();
 			}
+			
 			KvGoBack(g_Kv_Plugins);
 		}
 	}
@@ -376,10 +385,12 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 		Call_StartForward(newStatusForward);
 		Call_PushCell(true);
 		Call_Finish();
+		PrintTranslationToAll(g_CurrentMode, "OIMM Current Mode");
 	}
 	
 	strcopy(g_CurrentMode, sizeof(g_CurrentMode), g_NextMode);
 	g_NextMode[0] = '\0';
+	
 	
 	g_bFirstRound = false;
 
@@ -588,6 +599,10 @@ public Action:Timer_RetryVote(Handle:timer, Handle:data)
 	return Plugin_Continue;
 }
 
+public VoteHandlerNextMapNative(Handle:menu, MenuAction:action, param1, param2)
+{
+}
+
 public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 {
 	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes);
@@ -647,20 +662,26 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 			}
 			
 			new String:translationPhrase[64];
+			new String:voteTitle[64];
 			
-			new frequency = GetConVarInt(g_Cvar_Frequency);
+			GetVoteTitle(menu, useNativeVotes, voteTitle, sizeof(voteTitle));
 			
-			switch (frequency)
+			if (StrEqual(voteTitle, "OIMM Vote Mode NextMap"))
 			{
-				case Frequency_Map:
-				{
-					translationPhrase = "Vote Win NextMap";
-				}
-				
-				case Frequency_Round:
-				{
-					translationPhrase = "Vote Win NextMap FirstRound";
-				}
+				translationPhrase = "OIMM Vote Win NextMap";
+			}
+			else if (StrEqual(voteTitle, "OIMM Vote Mode NextMap FirstRound"))
+			{
+				translationPhrase = "OIMM Vote Win NextMap FirstRound";
+			}
+			else if (StrEqual(voteTitle, "OIMM Vote Mode NextRound"))
+			{
+				translationPhrase = "OIMM Next Map First Round Mode";
+			}
+			
+			if (useNativeVotes)
+			{
+				NativeVotes_DisplayPassCustom(menu, "%t", translationPhrase, winner);
 			}
 			
 			PrintHintTextToAll("%t", translationPhrase, winner);
@@ -675,11 +696,11 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 			
 			if (StrEqual(item, MEDIEVAL))
 			{
-				Format(buffer, sizeof(buffer), "%T", "Medieval Mode", param1);
+				Format(buffer, sizeof(buffer), "%T", "OIMM Medieval Mode", param1);
 			}
 			else if (StrEqual(item, STANDARD))
 			{
-				Format(buffer, sizeof(buffer), "%T", "Standard Mode", param1);
+				Format(buffer, sizeof(buffer), "%T", "OIMM Standard Mode", param1);
 			}
 			
 			if (buffer[0] != '\0')
@@ -701,7 +722,7 @@ public VoteHandlerNextRound(Handle:menu, MenuAction:action, param1, param2)
 		case MenuAction_Display:
 		{
 			new String:voteTitle[128];
-			Format(voteTitle, sizeof(voteTitle), "%T", "Vote Mode NextRound", param1);
+			Format(voteTitle, sizeof(voteTitle), "%T", "OIMM Vote Mode NextRound", param1);
 			SetPanelTitle(Handle:param2, voteTitle);
 		}
 		
@@ -751,6 +772,7 @@ public VoteNextRoundResults(Handle:menu,
                            num_items,
                            const item_info[][2])
 {
+	PrintHintTextToAll("%t");
 }
 
 public NV_VoteNextMapResults(Handle:vote,
@@ -827,55 +849,46 @@ public Native_Register(Handle:plugin, args)
 		return;
 	}
 	
-	AddPlugin(plugin, name, validateMap, statusChanged);
+	new Function:translator = GetNativeCell(4);
+	
+	if (translator == INVALID_FUNCTION)
+	{
+		ThrowNativeError(SP_ERROR_NATIVE, "Invalid OptInMultiMod_GetTranslation Function.");
+		return;
+	}
+	
+	
+	AddPlugin(plugin, name, validateMap, statusChanged, translator);
 }
 
-AddPlugin(Handle:plugin, const String:name[], Function:validateMap, Function:statusChanged)
+AddPlugin(Handle:plugin, const String:name[], Function:validateMap, Function:statusChanged, Function:translator)
 {
 	new Handle:validateForward = INVALID_HANDLE;
 	new Handle:statusForward = INVALID_HANDLE;
+	new Handle:translateForward = INVALID_HANDLE;
 	
-	KvJumpToKey(g_Kv_Plugins, name, true); // Find or create this key
+	new bool:loaded = KvJumpToKey(g_Kv_Plugins, name);
+	if (loaded)
+	{
+		LogMessage("Plugin already registered.  This can be caused by a plugin already being loaded with this name or not calling OptInMultiMod_Unregister in OnPluginEnd");
+	}
+	else
+	{
+		KvJumpToKey(g_Kv_Plugins, name, true); // Create this key
+	}
 
 	validateForward = Handle:KvGetNum(g_Kv_Plugins, VALIDATE_FORWARD, _:INVALID_HANDLE);
 	statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
+	translateForward = Handle:KvGetNum(g_Kv_Plugins, TRANSLATE_FORWARD, _:INVALID_HANDLE);
 
-	if (validateForward != INVALID_HANDLE && statusForward == INVALID_HANDLE)
+	// If loaded, check the function counts.  If they're 0, then the plugin was never unregistered.
+	// If they're > 0, a plugin is still loaded with this name
+	if (loaded && (validateForward != INVALID_HANDLE && GetForwardFunctionCount(validateForward) > 0) ||
+		(statusForward != INVALID_HANDLE && GetForwardFunctionCount(statusForward) > 0) || 
+		(translateForward != INVALID_HANDLE && GetForwardFunctionCount(translateForward) > 0))
 	{
-		// Validate forward is in a bad state, clean it up
-		LogMessage("Cleaning up stale validateMap forward");
-		CloseHandle(validateForward);
-		validateForward = INVALID_HANDLE;
-	}
-	else if (validateForward == INVALID_HANDLE && statusForward != INVALID_HANDLE)
-	{
-		// Status forward is in a bad state, clean it up
-		LogMessage("Cleaning up stale statusChanged forward");
-		CloseHandle(statusForward);
-		statusForward = INVALID_HANDLE;
-	}
-	else if (validateForward != INVALID_HANDLE && validateForward != INVALID_HANDLE)
-	{
-		if (GetForwardFunctionCount(validateForward) > 0 && GetForwardFunctionCount(statusForward) > 0)
-		{
-			KvRewind(g_Kv_Plugins);
-			ThrowNativeError(SP_ERROR_NATIVE, "A plugin named \"%s\" is already registered", name);
-			return;
-		}
-		else if (GetForwardFunctionCount(validateForward) > 0 && GetForwardFunctionCount(statusForward) == 0)
-		{
-			// Whoops, more issues
-			LogMessage("Cleaning up orphaned validateMap function");
-			CloseHandle(validateForward);
-			validateForward = INVALID_HANDLE;
-		}
-		else if (GetForwardFunctionCount(validateForward) == 0 && GetForwardFunctionCount(statusForward) > 0)
-		{
-			// Whoops, more issues
-			LogMessage("Cleaning up orphaned statusChanged function");
-			CloseHandle(statusForward);
-			statusForward = INVALID_HANDLE;
-		}
+		ThrowNativeError(SP_ERROR_NATIVE, "A plugin named \"%s\" is already registered", name);
+		return;
 	}
 	
 	if (validateForward == INVALID_HANDLE)
@@ -890,8 +903,16 @@ AddPlugin(Handle:plugin, const String:name[], Function:validateMap, Function:sta
 		KvSetNum(g_Kv_Plugins, STATUS_FORWARD, _:statusForward);
 	}
 	
+	if (translateForward == INVALID_HANDLE)
+	{
+		translateForward = CreateForward(ET_Ignore, Param_Cell, Param_String, Param_Cell);
+		KvSetNum(g_Kv_Plugins, TRANSLATE_FORWARD, _:translateForward);
+	}
+	
 	AddToForward(validateForward, plugin, validateMap);
 	AddToForward(statusForward, plugin, statusChanged);
+	AddToForward(translateForward, plugin, translator);
+	KvRewind(g_Kv_Plugins);
 }
 
 RemovePlugin(const String:name[])
@@ -909,6 +930,12 @@ RemovePlugin(const String:name[])
 		if (statusChanged != INVALID_HANDLE)
 		{
 			CloseHandle(statusChanged);
+		}
+		
+		new Handle:translateName = Handle:KvGetNum(g_Kv_Plugins, TRANSLATE_FORWARD, _:INVALID_HANDLE);
+		if (translateName != INVALID_HANDLE)
+		{
+			CloseHandle(translateName);
 		}
 		
 		KvDeleteThis(g_Kv_Plugins);
@@ -940,6 +967,18 @@ GetVoteItem(Handle:vote, bool:nativeVotes, position, String:infoBuf[], infoBufLe
 	}
 }
 
+GetVoteTitle(Handle:vote, bool:nativeVotes, String:voteTitle[], maxlength)
+{
+	if (nativeVotes)
+	{
+		NativeVotes_GetTitle(vote, voteTitle, maxlength);
+	}
+	else
+	{
+		GetMenuTitle(vote, voteTitle, maxlength);
+	}
+}
+
 RedrawVoteItem(bool:nativeVotes, const String:buffer[])
 {
 	if (nativeVotes)
@@ -949,5 +988,67 @@ RedrawVoteItem(bool:nativeVotes, const String:buffer[])
 	else
 	{
 		return RedrawMenuItem(buffer);
+	}
+}
+
+stock GetTranslatedName(const String:plugin[], client, String:transName[], maxlength)
+{
+	KvRewind(g_Kv_Plugins);
+	if (KvJumpToKey(g_Kv_Plugins, plugin))
+	{
+		new Handle:translateForward = Handle:KvGetNum(g_Kv_Plugins, TRANSLATE_FORWARD, _:INVALID_HANDLE);
+		if (translateForward != INVALID_HANDLE)
+		{
+			if (!IsClientInGame(client) || IsFakeClient(client))
+			{
+				transName[0] = '\0';
+				return;
+			}
+				
+			Call_StartForward(translateForward);
+			Call_PushCell(client);
+			Call_PushStringEx(transName, maxlength, SM_PARAM_STRING_COPY|SM_PARAM_STRING_UTF8, SM_PARAM_COPYBACK);
+			Call_PushCell(maxlength);
+		}
+		else
+		{
+			LogError("Could not find translate forward");
+			transName[0] = '\0';
+			return;
+		}
+		
+		KvGoBack(g_Kv_Plugins);
+	}
+	else
+	{
+		LogError("Could not find plugin");
+		transName[0] = '\0';
+	}
+}
+
+PrintTranslationToAll(const String:plugin[], const String:translation[])
+{
+	KvRewind(g_Kv_Plugins);
+	if (KvJumpToKey(g_Kv_Plugins, plugin))
+	{
+		new Handle:translateForward = Handle:KvGetNum(g_Kv_Plugins, TRANSLATE_FORWARD, _:INVALID_HANDLE);
+		if (translateForward != INVALID_HANDLE)
+		{
+			for (new i = 1; i <= MaxClients; ++i)
+			{
+				if (!IsClientInGame(i) || IsFakeClient(i))
+				{
+					continue;
+				}
+				
+				new String:transName[64];
+				Call_StartForward(translateForward);
+				Call_PushCell(i);
+				Call_PushStringEx(transName, sizeof(transName), SM_PARAM_STRING_COPY|SM_PARAM_STRING_UTF8, SM_PARAM_COPYBACK);
+				Call_PushCell(sizeof(transName));
+				
+				PrintHintText(i, "%t", translation, transName);
+			}
+		}
 	}
 }

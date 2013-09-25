@@ -1,11 +1,11 @@
 "Phrases"
 {
-	"OIMM Standard"
+	"OIMM Standard Mode"
 	{
 		"en"	"Standard"
 	}
 
-	"OIMM Medieval"
+	"OIMM Medieval Mode"
 	{
 		"en"	"Standard Medieval"
 	}
@@ -14,6 +14,12 @@
 	{
 		"#format"	"{1:s}"
 		"en"	"Next map's game mode is: {1}"
+	}
+
+	"OIMM Next Map First Round Mode"
+	{
+		"#format"	"{1:s}"
+		"en"	"Next map's first round game mode is: {1}"
 	}
 
 	"OIMM Next Round Mode"
