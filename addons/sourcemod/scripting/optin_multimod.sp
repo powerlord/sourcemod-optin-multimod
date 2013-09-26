@@ -37,10 +37,9 @@
 
 new bool:g_bNativeVotes;
 
-new bool:g_bFirstRound;
-
-new String:g_CurrentMode[64];
-new String:g_NextMode[64];
+new String:g_CurrentMode[128];
+new String:g_NextMode[128];
+new String:g_NextMapMode[128];
 
 new EngineVersion:g_EngineVersion;
 
@@ -128,6 +127,8 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "de");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
+			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
 		}
 		
 		case Engine_CSGO:
@@ -137,6 +138,8 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "de");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
+			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
 		}
 		
 		case Engine_DODS:
@@ -144,6 +147,8 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "dod");
 			
 			g_Cvar_Bonusroundtime = FindConVar("dod_bonusroundtime");
+			HookEvent("dod_round_start ", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("dod_round_win", Event_RoundEnd, EventHookMode_PostNoCopy);
 		}
 		
 		case Engine_HL2DM:
@@ -151,7 +156,9 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "dm");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
-			HookEventEx("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
 		}
 		
 		case Engine_TF2:
@@ -168,13 +175,15 @@ public OnPluginStart()
 			
 			g_Cvar_Medieval = FindConVar("tf_medieval");
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
-			HookEventEx("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
-			HookEventEx("teamplay_round_win", Event_RoundEnd, EventHookMode_PostNoCopy);
+			HookEvent("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("teamplay_round_win", Event_RoundEnd, EventHookMode_PostNoCopy);
 		}
 		
 		default:
 		{
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
+			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
 		}
 	}
 	
@@ -223,9 +232,7 @@ public OnLibraryRemoved(const String:name[])
 public OnMapStart()
 {
 	g_bMapEnded = false;
-	g_bFirstRound = true;
-	strcopy(g_CurrentMode, sizeof(g_CurrentMode), g_NextMode);
-	g_NextMode[0] = '\0';
+	g_bNextMapMedieval = false;
 	
 	if (g_Array_CurrentPlugins != INVALID_HANDLE)
 	{
@@ -236,7 +243,16 @@ public OnMapStart()
 	new String:map[PLATFORM_MAX_PATH];
 	GetCurrentMap(map, PLATFORM_MAX_PATH);
 	g_Array_CurrentPlugins = GetMapPlugins(map);
-
+	
+	if (g_NextMapMode[0] != '\0')
+	{
+		strcopy(g_NextMode, sizeof(g_NextMode), g_NextMapMode);
+		g_NextMapMode[0] = '\0';
+	}
+	else
+	{
+		ChooseRandomMode(g_Array_CurrentPlugins, g_NextMode, sizeof(g_NextMode));
+	}
 }
 
 public OnMapEnd()
@@ -338,11 +354,6 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 		return Plugin_Continue;
 	}
 	
-	if (g_bFirstRound && g_NextMode[0] == '\0')
-	{
-		ChooseRandomMode(g_Array_CurrentPlugins, g_NextMode, sizeof(g_NextMode));
-	}
-	
 	KvRewind(g_Kv_Plugins);
 	
 	if (g_CurrentMode[0] != '\0' && !StrEqual(g_CurrentMode, STANDARD) && !StrEqual(g_CurrentMode, MEDIEVAL))
@@ -385,15 +396,13 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 		Call_StartForward(newStatusForward);
 		Call_PushCell(true);
 		Call_Finish();
-		PrintTranslationToAll(g_CurrentMode, "OIMM Current Mode");
 	}
 	
 	strcopy(g_CurrentMode, sizeof(g_CurrentMode), g_NextMode);
 	g_NextMode[0] = '\0';
 	
+	PrintTranslationToAll(g_CurrentMode, "OIMM Current Mode");
 	
-	g_bFirstRound = false;
-
 	return Plugin_Continue;
 }
 
@@ -461,6 +470,7 @@ PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 	// No valid plugins and Medieval mode is off means no vote, default to standard
 	if (size == 0 && (g_EngineVersion != Engine_TF2 || !GetConVarBool(g_Cvar_MedievalAvailable)))
 	{
+		strcopy(g_NextMapMode, sizeof(g_NextMapMode), STANDARD);
 		CloseHandle(validPlugins);
 		return;
 	}
@@ -599,14 +609,8 @@ public Action:Timer_RetryVote(Handle:timer, Handle:data)
 	return Plugin_Continue;
 }
 
-public VoteHandlerNextMapNative(Handle:menu, MenuAction:action, param1, param2)
+public NV_VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 {
-}
-
-public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
-{
-	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes);
-
 	switch (action)
 	{
 		// Only call this for non-NativeVotes
@@ -618,79 +622,72 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 			NativeVotes_GetTitle(menu, voteTitle, sizeof(voteTitle));
 			Format(buffer, sizeof(buffer), "%T", voteTitle, param1);
 			
-			if (useNativeVotes)
-			{
-				return _:NativeVotes_RedrawVoteTitle(buffer);
-			}
-			else
-			{
-				SetPanelTitle(Handle:param2, buffer);
-			}
+			return _:NativeVotes_RedrawVoteTitle(buffer);
 		}
 		
 		case MenuAction_End:
 		{
-			CloseHandle(menu);
+			NativeVotes_Close(menu);
 		}
 		
 		case MenuAction_VoteCancel:
 		{
-			if (useNativeVotes)
+			if (param1 == VoteCancel_NoVotes)
 			{
-				if (param1 == VoteCancel_NoVotes)
-				{
-					NativeVotes_DisplayFail(menu, NativeVotesFail_NotEnoughVotes);
-				}
-				else
-				{
-					NativeVotes_DisplayFail(menu, NativeVotesFail_Generic);
-				}
+				NativeVotes_DisplayFail(menu, NativeVotesFail_NotEnoughVotes);
+			}
+			else
+			{
+				NativeVotes_DisplayFail(menu, NativeVotesFail_Generic);
 			}
 		}
 		
 		case MenuAction_VoteEnd:
 		{
 			new String:winner[64];
-			if (useNativeVotes)
-			{
-				NativeVotes_GetItem(menu, param1, winner, sizeof(winner));
-				
-			}
-			else
-			{
-				GetMenuItem(menu, param1, winner, sizeof(winner));
-			}
+			NativeVotes_GetItem(menu, param1, winner, sizeof(winner));
 			
-			new String:translationPhrase[64];
+			new String:translation[64];
 			new String:voteTitle[64];
 			
-			GetVoteTitle(menu, useNativeVotes, voteTitle, sizeof(voteTitle));
+			NativeVotes_GetTitle(menu, voteTitle, sizeof(voteTitle));
+			new bool:nextMap = false;
 			
 			if (StrEqual(voteTitle, "OIMM Vote Mode NextMap"))
 			{
-				translationPhrase = "OIMM Vote Win NextMap";
+				translation = "OIMM Next Map Mode";
+				strcopy(g_NextMapMode, sizeof(g_NextMapMode), winner);
 			}
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextMap FirstRound"))
 			{
-				translationPhrase = "OIMM Vote Win NextMap FirstRound";
+				translation = "OIMM Next Map First Round Mode";
+				strcopy(g_NextMapMode, sizeof(g_NextMapMode), winner);
 			}
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextRound"))
 			{
-				translationPhrase = "OIMM Next Map First Round Mode";
+				translation = "OIMM Next Round Mode";
+				strcopy(g_NextMode, sizeof(g_NextMode), winner);
 			}
 			
-			if (useNativeVotes)
+			for (new i = 1; i <= MaxClients; ++i)
 			{
-				NativeVotes_DisplayPassCustom(menu, "%t", translationPhrase, winner);
+				if (!IsClientInGame(i) || IsFakeClient(i))
+				{
+					continue;
+				}
+				
+				new String:transName[128];
+				GetTranslatedName(winner, i, transName, sizeof(transName));
+
+				NativeVotes_DisplayPassCustomToOne(menu, i, "%t", translation, transName);
+				PrintHintText(i, "%t", translation, transName);
 			}
-			
-			PrintHintTextToAll("%t", translationPhrase, winner);
 		}
 		
 		case MenuAction_DisplayItem:
 		{
-			new String:item[20];
-			GetVoteItem(menu, useNativeVotes, param2, item, sizeof(item));
+			new String:item[128];
+			NativeVotes_GetItem(menu, param2, item, sizeof(item));
 			
 			new String:buffer[128];
 			
@@ -705,7 +702,83 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 			
 			if (buffer[0] != '\0')
 			{
-				return RedrawVoteItem(useNativeVotes, buffer);
+				return _:NativeVotes_RedrawVoteItem(buffer);
+			}
+		}
+	}
+	return 0;
+}
+
+public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
+{
+	switch (action)
+	{
+		// Only call this for non-NativeVotes
+		case MenuAction_Display:
+		{
+			new String:voteTitle[50];
+			new String:buffer[256];
+			
+			NativeVotes_GetTitle(menu, voteTitle, sizeof(voteTitle));
+			Format(buffer, sizeof(buffer), "%T", voteTitle, param1);
+			
+			SetPanelTitle(Handle:param2, buffer);
+		}
+		
+		case MenuAction_End:
+		{
+			CloseHandle(menu);
+		}
+		
+		case MenuAction_VoteCancel:
+		{
+		}
+		
+		case MenuAction_VoteEnd:
+		{
+			new String:winner[64];
+			GetMenuItem(menu, param1, winner, sizeof(winner));
+			
+			new String:translationPhrase[64];
+			new String:voteTitle[64];
+
+			GetMenuTitle(menu, voteTitle, sizeof(voteTitle));
+			
+			if (StrEqual(voteTitle, "OIMM Vote Mode NextMap"))
+			{
+				translationPhrase = "OIMM Vote Win NextMap";
+			}
+			else if (StrEqual(voteTitle, "OIMM Vote Mode NextMap FirstRound"))
+			{
+				translationPhrase = "OIMM Vote Win NextMap FirstRound";
+			}
+			else if (StrEqual(voteTitle, "OIMM Vote Mode NextRound"))
+			{
+				translationPhrase = "OIMM Next Map First Round Mode";
+			}
+			
+			PrintHintTextToAll("%t", translationPhrase, winner);
+		}
+		
+		case MenuAction_DisplayItem:
+		{
+			new String:item[128];
+			GetMenuItem(menu, param2, item, sizeof(item));
+			
+			new String:buffer[128];
+			
+			if (StrEqual(item, MEDIEVAL))
+			{
+				Format(buffer, sizeof(buffer), "%T", "OIMM Medieval Mode", param1);
+			}
+			else if (StrEqual(item, STANDARD))
+			{
+				Format(buffer, sizeof(buffer), "%T", "OIMM Standard Mode", param1);
+			}
+			
+			if (buffer[0] != '\0')
+			{
+				return RedrawMenuItem(buffer);
 			}
 		}
 	}
@@ -955,56 +1028,29 @@ AddVoteItem(Handle:vote, bool:nativeVotes, const String:item[], const String:dis
 	}
 }
 
-GetVoteItem(Handle:vote, bool:nativeVotes, position, String:infoBuf[], infoBufLen, String:dispBuf[]="", dispBufLen=0)
+GetTranslatedName(const String:plugin[], client, String:transName[], maxlength)
 {
-	if (nativeVotes)
+	if (!IsClientInGame(client) || IsFakeClient(client))
 	{
-		NativeVotes_GetItem(vote, position, infoBuf, infoBufLen, dispBuf, dispBufLen);
+		transName[0] = '\0';
+		return;
 	}
-	else
-	{
-		GetMenuItem(vote, position, infoBuf, infoBufLen, _, dispBuf, dispBufLen);
-	}
-}
-
-GetVoteTitle(Handle:vote, bool:nativeVotes, String:voteTitle[], maxlength)
-{
-	if (nativeVotes)
-	{
-		NativeVotes_GetTitle(vote, voteTitle, maxlength);
-	}
-	else
-	{
-		GetMenuTitle(vote, voteTitle, maxlength);
-	}
-}
-
-RedrawVoteItem(bool:nativeVotes, const String:buffer[])
-{
-	if (nativeVotes)
-	{
-		return _:NativeVotes_RedrawVoteItem(buffer);
-	}
-	else
-	{
-		return RedrawMenuItem(buffer);
-	}
-}
-
-stock GetTranslatedName(const String:plugin[], client, String:transName[], maxlength)
-{
+	
 	KvRewind(g_Kv_Plugins);
-	if (KvJumpToKey(g_Kv_Plugins, plugin))
+	
+	if (StrEqual(plugin, STANDARD))
+	{
+		Format(transName, maxlength, "%T", "OIMM Standard Mode", client);
+	}
+	else if (StrEqual(plugin, MEDIEVAL))
+	{
+		Format(transName, maxlength, "%T", "OIMM Medieval Mode", client);
+	}
+	else if (KvJumpToKey(g_Kv_Plugins, plugin))
 	{
 		new Handle:translateForward = Handle:KvGetNum(g_Kv_Plugins, TRANSLATE_FORWARD, _:INVALID_HANDLE);
 		if (translateForward != INVALID_HANDLE)
 		{
-			if (!IsClientInGame(client) || IsFakeClient(client))
-			{
-				transName[0] = '\0';
-				return;
-			}
-				
 			Call_StartForward(translateForward);
 			Call_PushCell(client);
 			Call_PushStringEx(transName, maxlength, SM_PARAM_STRING_COPY|SM_PARAM_STRING_UTF8, SM_PARAM_COPYBACK);
@@ -1028,27 +1074,16 @@ stock GetTranslatedName(const String:plugin[], client, String:transName[], maxle
 
 PrintTranslationToAll(const String:plugin[], const String:translation[])
 {
-	KvRewind(g_Kv_Plugins);
-	if (KvJumpToKey(g_Kv_Plugins, plugin))
+	for (new i = 1; i <= MaxClients; ++i)
 	{
-		new Handle:translateForward = Handle:KvGetNum(g_Kv_Plugins, TRANSLATE_FORWARD, _:INVALID_HANDLE);
-		if (translateForward != INVALID_HANDLE)
+		if (!IsClientInGame(i) || IsFakeClient(i))
 		{
-			for (new i = 1; i <= MaxClients; ++i)
-			{
-				if (!IsClientInGame(i) || IsFakeClient(i))
-				{
-					continue;
-				}
-				
-				new String:transName[64];
-				Call_StartForward(translateForward);
-				Call_PushCell(i);
-				Call_PushStringEx(transName, sizeof(transName), SM_PARAM_STRING_COPY|SM_PARAM_STRING_UTF8, SM_PARAM_COPYBACK);
-				Call_PushCell(sizeof(transName));
-				
-				PrintHintText(i, "%t", translation, transName);
-			}
+			continue;
 		}
+		
+		new String:transName[128];
+		GetTranslatedName(plugin, i, transName, sizeof(transName));
+		
+		PrintHintText(i, "%t", translation, transName);
 	}
 }
