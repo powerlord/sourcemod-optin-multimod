@@ -40,6 +40,8 @@ functag public OptInMultiMod_StatusChanged(bool:enabled);
 
 functag public bool:OptInMultiMod_ValidateMap(const String:map[]);
 
+// This is mandatory, due to translations being specific to the plugin that loads them
+// Note: This feature may be pulled out before final
 functag public OptInMultiMod_GetTranslation(client, String:translation[], maxlength);
 
 native OptInMultiMod_Register(const String:name[], OptInMultiMod_ValidateMap:validateMap, OptInMultiMod_StatusChanged:status, OptInMultiMod_GetTranslation:translator);
