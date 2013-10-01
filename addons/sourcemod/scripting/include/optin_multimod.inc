@@ -44,7 +44,7 @@ functag public bool:OptInMultiMod_ValidateMap(const String:map[]);
 // Note: This feature may be pulled out before final
 functag public OptInMultiMod_GetTranslation(client, String:translation[], maxlength);
 
-native OptInMultiMod_Register(const String:name[], OptInMultiMod_ValidateMap:validateMap, OptInMultiMod_StatusChanged:status, OptInMultiMod_GetTranslation:translator);
+native OptInMultiMod_Register(const String:name[], OptInMultiMod_ValidateMap:validateMap, OptInMultiMod_StatusChanged:status, OptInMultiMod_GetTranslation:translator=INVALID_FUNCTION);
 native OptInMultiMod_Unregister(const String:name[]);
 
 // You should NEVER require this plugin

@@ -924,13 +924,6 @@ public Native_Register(Handle:plugin, args)
 	
 	new Function:translator = GetNativeCell(4);
 	
-	if (translator == INVALID_FUNCTION)
-	{
-		ThrowNativeError(SP_ERROR_NATIVE, "Invalid OptInMultiMod_GetTranslation Function.");
-		return;
-	}
-	
-	
 	AddPlugin(plugin, name, validateMap, statusChanged, translator);
 }
 
@@ -957,8 +950,7 @@ AddPlugin(Handle:plugin, const String:name[], Function:validateMap, Function:sta
 	// If loaded, check the function counts.  If they're 0, then the plugin was never unregistered.
 	// If they're > 0, a plugin is still loaded with this name
 	if (loaded && (validateForward != INVALID_HANDLE && GetForwardFunctionCount(validateForward) > 0) ||
-		(statusForward != INVALID_HANDLE && GetForwardFunctionCount(statusForward) > 0) || 
-		(translateForward != INVALID_HANDLE && GetForwardFunctionCount(translateForward) > 0))
+		(statusForward != INVALID_HANDLE && GetForwardFunctionCount(statusForward) > 0))
 	{
 		ThrowNativeError(SP_ERROR_NATIVE, "A plugin named \"%s\" is already registered", name);
 		return;
@@ -984,7 +976,10 @@ AddPlugin(Handle:plugin, const String:name[], Function:validateMap, Function:sta
 	
 	AddToForward(validateForward, plugin, validateMap);
 	AddToForward(statusForward, plugin, statusChanged);
-	AddToForward(translateForward, plugin, translator);
+	if (translator != INVALID_FUNCTION)
+	{
+		AddToForward(translateForward, plugin, translator);
+	}
 	KvRewind(g_Kv_Plugins);
 }
 
@@ -1056,11 +1051,10 @@ GetTranslatedName(const String:plugin[], client, String:transName[], maxlength)
 			Call_PushStringEx(transName, maxlength, SM_PARAM_STRING_COPY|SM_PARAM_STRING_UTF8, SM_PARAM_COPYBACK);
 			Call_PushCell(maxlength);
 		}
-		else
+		
+		if (transName[0] == '\0')
 		{
-			LogError("Could not find translate forward");
-			transName[0] = '\0';
-			return;
+			strcopy(transName, maxlength, plugin);
 		}
 		
 		KvGoBack(g_Kv_Plugins);
