@@ -102,11 +102,11 @@ public OnPluginStart()
 {
 	CreateConVar("optin_multimod_version", VERSION, "Opt-in Multimod version", FCVAR_DONTRECORD|FCVAR_NOTIFY|FCVAR_PLUGIN);
 	g_Cvar_Enabled = CreateConVar("optin_multimod_enabled", "1", "Enable Opt-in MultiMod?", FCVAR_DONTRECORD|FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
-	g_Cvar_Mode = CreateConVar("optin_multimod_mode", "1", "Opt-in MultiMod operating mode. 0 = Random, 1 = Vote.", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
-	g_Cvar_Frequency = CreateConVar("optin_multimod_frequency", "1", "Opt-in MultiMod mode change timing. 0 = Per Map, 1 = Per Round.", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
-	g_Cvar_UseNativeVotes = CreateConVar("optin_multimod_nativevotes", "1", "Use NativeVotes for votes if available.  Only applies to TF2 (Valve broke it for CS:GO).", FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0);
-	g_Cvar_StandardAvailable = CreateConVar("optin_multimod_standard", "1", "Allow standard gameplay on recognized map prefixes?", FCVAR_DONTRECORD|FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
-	g_Cvar_MedievalAvailable = CreateConVar("optin_multimod_medieval", "0", "TF2 only: Add Medieval to modes list?", FCVAR_DONTRECORD|FCVAR_NOTIFY|FCVAR_PLUGIN, true, 0.0, true, 1.0);
+	g_Cvar_Mode = CreateConVar("optin_multimod_mode", "1", "Opt-in MultiMod operating mode. 0 = Random, 1 = Vote.", FCVAR_PLUGIN, true, 0.0, true, 1.0);
+	g_Cvar_Frequency = CreateConVar("optin_multimod_frequency", "1", "Opt-in MultiMod mode change timing. 0 = Per Map, 1 = Per Round.", FCVAR_PLUGIN, true, 0.0, true, 1.0);
+	g_Cvar_UseNativeVotes = CreateConVar("optin_multimod_nativevotes", "1", "Use NativeVotes for votes if available.  Only applies to TF2 (Valve broke it for CS:GO).", FCVAR_PLUGIN, true, 0.0);
+	g_Cvar_StandardAvailable = CreateConVar("optin_multimod_standard", "1", "Allow standard gameplay on recognized map prefixes?", FCVAR_PLUGIN, true, 0.0, true, 1.0);
+	g_Cvar_MedievalAvailable = CreateConVar("optin_multimod_medieval", "0", "TF2 only: Add Medieval to modes list?", FCVAR_PLUGIN, true, 0.0, true, 1.0);
 
 	HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
 	HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
@@ -500,8 +500,6 @@ PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 	
 	new Handle:vote;
 	
-	new Function:voteHandler;
-	
 	new frequency = GetConVarInt(g_Cvar_Frequency);
 	
 	new String:voteTitle[128];
@@ -538,13 +536,13 @@ PrepareVote(const String:map[], Handle:validPlugins, time, bool:nextMap = false)
 
 	if (useNativeVotes)
 	{
-		vote = NativeVotes_Create(voteHandler, NativeVotesType_Custom_Mult, NATIVEVOTES_ACTIONS_DEFAULT|MenuAction_Display|MenuAction_DisplayItem);
+		vote = NativeVotes_Create(NV_VoteHandler, NativeVotesType_Custom_Mult, NATIVEVOTES_ACTIONS_DEFAULT|MenuAction_Display|MenuAction_DisplayItem);
 		NativeVotes_SetTitle(vote, voteTitle);
 		NativeVotes_SetDetails(vote, map);
 	}
 	else
 	{
-		vote = CreateMenu(voteHandler, MENU_ACTIONS_DEFAULT|MenuAction_Display|MenuAction_DisplayItem|MenuAction_VoteEnd);
+		vote = CreateMenu(VoteHandler, MENU_ACTIONS_DEFAULT|MenuAction_Display|MenuAction_DisplayItem|MenuAction_VoteEnd);
 		SetMenuTitle(vote, "%s", voteTitle);
 	}
 	
@@ -609,7 +607,7 @@ public Action:Timer_RetryVote(Handle:timer, Handle:data)
 	return Plugin_Continue;
 }
 
-public NV_VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
+public NV_VoteHandler(Handle:menu, MenuAction:action, param1, param2)
 {
 	switch (action)
 	{
@@ -651,7 +649,6 @@ public NV_VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 			new String:voteTitle[64];
 			
 			NativeVotes_GetTitle(menu, voteTitle, sizeof(voteTitle));
-			new bool:nextMap = false;
 			
 			if (StrEqual(voteTitle, "OIMM Vote Mode NextMap"))
 			{
@@ -666,7 +663,7 @@ public NV_VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextRound"))
 			{
 				translation = "OIMM Next Round Mode";
-				strcopy(g_NextMode, sizeof(g_NextMode), winner);
+				strcopy(g_NextMode, sizeof(g_NextMode), winner); // Note this is a different variable than the other two
 			}
 			
 			for (new i = 1; i <= MaxClients; ++i)
@@ -709,7 +706,7 @@ public NV_VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 	return 0;
 }
 
-public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
+public VoteHandler(Handle:menu, MenuAction:action, param1, param2)
 {
 	switch (action)
 	{
@@ -739,25 +736,40 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 			new String:winner[64];
 			GetMenuItem(menu, param1, winner, sizeof(winner));
 			
-			new String:translationPhrase[64];
+			new String:translation[64];
 			new String:voteTitle[64];
 
 			GetMenuTitle(menu, voteTitle, sizeof(voteTitle));
 			
 			if (StrEqual(voteTitle, "OIMM Vote Mode NextMap"))
 			{
-				translationPhrase = "OIMM Vote Win NextMap";
+				translation = "OIMM Vote Win NextMap";
+				strcopy(g_NextMapMode, sizeof(g_NextMapMode), winner);
 			}
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextMap FirstRound"))
 			{
-				translationPhrase = "OIMM Vote Win NextMap FirstRound";
+				translation = "OIMM Vote Win NextMap FirstRound";
+				strcopy(g_NextMapMode, sizeof(g_NextMapMode), winner);
 			}
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextRound"))
 			{
-				translationPhrase = "OIMM Next Map First Round Mode";
+				translation = "OIMM Next Map First Round Mode";
+				strcopy(g_NextMode, sizeof(g_NextMode), winner); // Note this is a different variable than the other two
 			}
 			
-			PrintHintTextToAll("%t", translationPhrase, winner);
+			for (new i = 1; i <= MaxClients; ++i)
+			{
+				if (!IsClientInGame(i) || IsFakeClient(i))
+				{
+					continue;
+				}
+				
+				new String:transName[128];
+				GetTranslatedName(winner, i, transName, sizeof(transName));
+				
+				NativeVotes_DisplayPassCustomToOne(menu, i, "%t", translation, transName);
+				PrintHintText(i, "%t", translation, transName);
+			}
 		}
 		
 		case MenuAction_DisplayItem:
@@ -783,94 +795,6 @@ public VoteHandlerNextMap(Handle:menu, MenuAction:action, param1, param2)
 		}
 	}
 	return 0;
-}
-
-public VoteHandlerNextRound(Handle:menu, MenuAction:action, param1, param2)
-{
-	new bool:useNativeVotes = g_bNativeVotes && GetConVarBool(g_Cvar_UseNativeVotes);
-
-	switch (action)
-	{
-		// Only call this for non-NativeVotes
-		case MenuAction_Display:
-		{
-			new String:voteTitle[128];
-			Format(voteTitle, sizeof(voteTitle), "%T", "OIMM Vote Mode NextRound", param1);
-			SetPanelTitle(Handle:param2, voteTitle);
-		}
-		
-		case MenuAction_End:
-		{
-			CloseHandle(menu);
-		}
-		
-		case MenuAction_VoteCancel:
-		{
-			if (useNativeVotes)
-			{
-				if (param1 == VoteCancel_NoVotes)
-				{
-					NativeVotes_DisplayFail(menu, NativeVotesFail_NotEnoughVotes);
-				}
-				else
-				{
-					NativeVotes_DisplayFail(menu, NativeVotesFail_Generic);
-				}
-			}
-		}
-		
-	}
-}
-
-public NV_VoteNextRoundResults(Handle:vote,
-							num_votes, 
-							num_clients,
-							const client_indexes[],
-							const client_votes[],
-							num_items,
-							const item_indexes[],
-							const item_votes[])
-{
-	new client_info[num_clients][2];
-	new item_info[num_items][2];
-	
-	NativeVotes_FixResults(num_clients, client_indexes, client_votes, num_items, item_indexes, item_votes, client_info, item_info);
-	VoteNextRoundResults(vote, num_votes, num_clients, client_info, num_items, item_info);
-}
-
-public VoteNextRoundResults(Handle:menu,
-                           num_votes, 
-                           num_clients,
-                           const client_info[][2], 
-                           num_items,
-                           const item_info[][2])
-{
-	PrintHintTextToAll("%t");
-}
-
-public NV_VoteNextMapResults(Handle:vote,
-							num_votes, 
-							num_clients,
-							const client_indexes[],
-							const client_votes[],
-							num_items,
-							const item_indexes[],
-							const item_votes[])
-{
-	new client_info[num_clients][2];
-	new item_info[num_items][2];
-	
-	NativeVotes_FixResults(num_clients, client_indexes, client_votes, num_items, item_indexes, item_votes, client_info, item_info);
-	VoteNextMapResults(vote, num_votes, num_clients, client_info, num_items, item_info);
-}
-
-public VoteNextMapResults(Handle:menu,
-                           num_votes, 
-                           num_clients,
-                           const client_info[][2], 
-                           num_items,
-                           const item_info[][2])
-{
 }
 
 public Native_Unregister(Handle:plugin, args)
