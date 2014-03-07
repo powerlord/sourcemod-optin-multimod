@@ -2,7 +2,10 @@
  * vim: set ts=4 :
  * =============================================================================
  * Opt-in Multimod
- * Copyright (C) 2013 Ross Bemrose (Powerlord).  All rights reserved.
+ * A Multi-mod plugin that uses explicit support from the game to do voting
+ * for game modes.  Can do votes per-round.
+ * 
+ * Copyright (C) 2013-2014 Ross Bemrose (Powerlord).  All rights reserved.
  * =============================================================================
  *
  * This program is free software; you can redistribute it and/or modify it under
@@ -53,6 +56,9 @@ new Handle:g_Cvar_StandardAvailable;
 // Valve Cvars
 new Handle:g_Cvar_Bonusroundtime;
 new Handle:g_Cvar_Medieval;
+new Handle:g_Cvar_MaxRounds;
+new Handle:g_Cvar_Winlimit;
+new Handle:g_Cvar_MatchClinch;
 
 new bool:g_bNextMapMedieval;
 
@@ -64,6 +70,13 @@ new Handle:g_hMapPrefixes;
 
 new Handle:g_hRetryTimer = INVALID_HANDLE;
 new bool:g_bMapEnded = false;
+new bool:g_HasIntermissionStarted = false;
+
+// Various score counters and such to track when the last round will happen
+/* Upper bound of how many team there could be */
+#define MAXTEAMS 10
+new g_winCount[MAXTEAMS];
+new g_TotalRounds = 0;
 
 enum
 {
@@ -113,6 +126,10 @@ public OnPluginStart()
 	
 	HookConVarChange(FindConVar("sm_nextmap"), CvarNextMap);
 	
+	g_Cvar_MaxRounds = FindConVar("mp_maxrounds");
+	g_Cvar_Winlimit = FindConVar("mp_winlimit");
+	
+	
 	RegConsoleCmd("currentmode", Cmd_CurrentMode, "Show current mode");
 
 	g_hMapPrefixes = CreateArray(ByteCountToCells(10));
@@ -127,8 +144,9 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "de");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
+			
 			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
-			HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
+			HookEvent("round_end", Event_RoundEnd);
 		}
 		
 		case Engine_CSGO:
@@ -138,8 +156,12 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "de");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
+			g_Cvar_MatchClinch = FindConVar("mp_match_can_clinch");
+
+			HookEvent("cs_intermission", Event_Intermission);
+			HookEvent("announce_phase_end", Event_PhaseEnd);
 			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
-			HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
+			HookEvent("round_end", Event_RoundEnd);
 		}
 		
 		case Engine_DODS:
@@ -147,8 +169,9 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "dod");
 			
 			g_Cvar_Bonusroundtime = FindConVar("dod_bonusroundtime");
+			
 			HookEvent("dod_round_start ", Event_RoundStart, EventHookMode_Pre);
-			HookEvent("dod_round_win", Event_RoundEnd, EventHookMode_PostNoCopy);
+			HookEvent("dod_round_win", Event_RoundEnd);
 		}
 		
 		case Engine_HL2DM:
@@ -156,9 +179,20 @@ public OnPluginStart()
 			PushArrayString(g_hMapPrefixes, "dm");
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
+			
 			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
 			HookEvent("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
-			HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
+			HookEvent("round_end", Event_RoundEnd);
+		}
+		
+		case Engine_NuclearDawn:
+		{
+			PushArrayString(g_hMapPrefixes, "nd");
+			
+			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
+			
+			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
+			HookEvent("round_win", Event_RoundEnd);
 		}
 		
 		case Engine_TF2:
@@ -175,15 +209,17 @@ public OnPluginStart()
 			
 			g_Cvar_Medieval = FindConVar("tf_medieval");
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
+			
 			HookEvent("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
-			HookEvent("teamplay_round_win", Event_RoundEnd, EventHookMode_PostNoCopy);
+			HookEvent("teamplay_round_win", Event_RoundEnd);
 		}
 		
 		default:
 		{
 			g_Cvar_Bonusroundtime = FindConVar("mp_bonusroundtime");
+			
 			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
-			HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
+			HookEvent("round_end", Event_RoundEnd);
 		}
 	}
 	
@@ -195,6 +231,13 @@ public OnPluginStart()
 
 public OnConfigsExecuted()
 {
+	g_TotalRounds = 0;
+	
+	for (new i = 0; i < MAXTEAMS; i++)
+	{
+		g_winCount[i] = 0;	
+	}
+	
 	if (g_Cvar_Bonusroundtime != INVALID_HANDLE)
 	{
 		new time = GetConVarInt(g_Cvar_Bonusroundtime);
@@ -257,17 +300,40 @@ public OnMapStart()
 
 public OnMapEnd()
 {
-	new bool:bMedieval = GetConVarBool(g_Cvar_Medieval);
+	g_HasIntermissionStarted = false;
 	
-	if (bMedieval && !g_bNextMapMedieval)
+	if (g_CurrentMode[0] != '\0' && !StrEqual(g_CurrentMode, STANDARD) && !StrEqual(g_CurrentMode, MEDIEVAL))
 	{
-		SetConVarBool(g_Cvar_Medieval, false);
+		KvRewind(g_Kv_Plugins);
+		if (KvJumpToKey(g_Kv_Plugins, g_CurrentMode))
+		{
+			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
+			if (statusForward != INVALID_HANDLE)
+			{
+				Call_StartForward(statusForward);
+				Call_PushCell(false);
+				Call_Finish();
+			}
+			
+			KvGoBack(g_Kv_Plugins);
+		}
 	}
-	else if (g_bNextMapMedieval && !bMedieval)
+	
+	if (g_Cvar_Medieval != INVALID_HANDLE)
 	{
-		SetConVarBool(g_Cvar_Medieval, true);
-		g_bNextMapMedieval = false;
+		new bool:bMedieval = GetConVarBool(g_Cvar_Medieval);
+		
+		if (bMedieval && !g_bNextMapMedieval)
+		{
+			SetConVarBool(g_Cvar_Medieval, false);
+		}
+		else if (g_bNextMapMedieval && !bMedieval)
+		{
+			SetConVarBool(g_Cvar_Medieval, true);
+			g_bNextMapMedieval = false;
+		}
 	}
+	
 	if (g_hRetryTimer != INVALID_HANDLE)
 	{
 		g_bMapEnded = true;
@@ -413,14 +479,55 @@ ChooseRandomMode(Handle:validPlugins, String:mode[], maxlength)
 	GetArrayString(validPlugins, GetRandomInt(0, size - 1), mode, maxlength);
 }
 
-// nocopy because we don't care who wins
-public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
+public Event_Intermission(Handle:event, const String:name[], bool:dontBroadcast)
 {
-	if (GetConVarInt(g_Cvar_Frequency) == Frequency_Map)
+	g_HasIntermissionStarted = true;
+}
+
+public Event_PhaseEnd(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	/* announce_phase_end fires for both half time and the end of the map, but intermission fires first for end of the map. */
+	if (g_HasIntermissionStarted)
 	{
 		return;
 	}
 
+	/* No intermission yet, so this must be half time. Swap the score counters. */
+	new t_score = g_winCount[2];
+	g_winCount[2] =  g_winCount[3];
+	g_winCount[3] = t_score;
+}
+
+public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	// TODO : Winlimit stuff
+	
+	new winner;
+	if (strcmp(name, "round_win") == 0 || strcmp(name, "dod_round_win") == 0)
+	{
+		// Nuclear Dawn & DoD:S
+		winner = GetEventInt(event, "team");
+	}
+	else
+	{
+		winner = GetEventInt(event, "winner");
+	}	
+	
+	g_TotalRounds++;
+	
+	if (winner > 1 && winner < MAXTEAMS)
+	{
+		g_winCount[winner]++;
+	}
+	
+	CheckWinLimit(g_winCount[winner]);
+	CheckMaxRounds(g_TotalRounds);
+
+	if (GetConVarInt(g_Cvar_Frequency) == Frequency_Map)
+	{
+		return;
+	}
+	
 	new mode = GetConVarInt(g_Cvar_Mode);
 	switch (mode)
 	{
@@ -1003,5 +1110,28 @@ PrintTranslationToAll(const String:plugin[], const String:translation[])
 		GetTranslatedName(plugin, i, transName, sizeof(transName));
 		
 		PrintHintText(i, "%t", translation, transName);
+	}
+}
+
+bool:IsLastRound()
+{
+	new timeLeft;
+	new maxrounds = GetConVarInt(g_Cvar_MaxRounds);;
+	
+	GetMapTimeLeft(timeleft);
+	
+	if (timeLeft <= 0)
+	{
+		return true;
+	}
+	
+	
+	
+	switch (g_EngineVersion)
+	{
+		case Engine_TF2:
+		{
+			
+		}
 	}
 }

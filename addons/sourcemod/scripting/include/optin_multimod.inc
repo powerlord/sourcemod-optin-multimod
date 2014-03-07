@@ -2,7 +2,10 @@
  * vim: set ts=4 :
  * =============================================================================
  * Opt-in Multimod
- * Copyright (C) 2013 Ross Bemrose (Powerlord).  All rights reserved.
+ * A Multi-mod plugin that uses explicit support from the game to do voting
+ * for game modes.  Can do votes per-round.
+ * 
+ * Copyright (C) 2013-2014 Ross Bemrose (Powerlord).  All rights reserved.
  * =============================================================================
  *
  * This program is free software; you can redistribute it and/or modify it under
