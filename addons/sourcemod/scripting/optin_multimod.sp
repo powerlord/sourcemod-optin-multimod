@@ -24,6 +24,7 @@
  */
 
 #include <sourcemod>
+#include <sdktools>
 #undef REQUIRE_PLUGIN
 #include <nativevotes>
 
@@ -37,6 +38,41 @@
 
 #define STANDARD "OIMM Standard"
 #define MEDIEVAL "OIMM Medieval"
+
+enum RoundCounting
+{
+	RoundCounting_Standard = 0,
+	RoundCounting_MvM,
+	RoundCounting_ArmsRace,
+}
+
+new RoundCounting:g_RoundCounting = RoundCounting_Standard;
+
+// These correspond to tf_gamerules m_nGameType netprop
+enum
+{
+	TF2_GameType_Unknown	= 0,
+	TF2_GameType_CTF		= 1,
+	TF2_GameType_CP			= 2,
+	TF2_GameType_PL			= 3,
+	TF2_GameType_Arena		= 4,
+}
+
+// CSGO requires two cvars to get the game type
+enum
+{
+	CSGO_GameType_Classic	= 0,
+	CSGO_GameType_GunGame	= 1,
+	CSGO_GameType_Training	= 2,
+	CSGO_GameType_Custom	= 3,
+}
+
+enum
+{
+	CSGO_GunGameMode_ArmsRace	= 0,
+	CSGO_GunGameMode_Demolition	= 1,
+	CSGO_GunGameMode_DeathMatch	= 2,
+}
 
 new bool:g_bNativeVotes;
 
@@ -56,9 +92,11 @@ new Handle:g_Cvar_StandardAvailable;
 // Valve Cvars
 new Handle:g_Cvar_Bonusroundtime;
 new Handle:g_Cvar_Medieval;
-new Handle:g_Cvar_MaxRounds;
+new Handle:g_Cvar_Maxrounds;
 new Handle:g_Cvar_Winlimit;
 new Handle:g_Cvar_MatchClinch;
+new Handle:g_Cvar_GameType;
+new Handle:g_Cvar_GameMode;
 
 new bool:g_bNextMapMedieval;
 
@@ -126,7 +164,7 @@ public OnPluginStart()
 	
 	HookConVarChange(FindConVar("sm_nextmap"), CvarNextMap);
 	
-	g_Cvar_MaxRounds = FindConVar("mp_maxrounds");
+	g_Cvar_Maxrounds = FindConVar("mp_maxrounds");
 	g_Cvar_Winlimit = FindConVar("mp_winlimit");
 	
 	
@@ -157,7 +195,9 @@ public OnPluginStart()
 			
 			g_Cvar_Bonusroundtime = FindConVar("mp_round_restart_delay");
 			g_Cvar_MatchClinch = FindConVar("mp_match_can_clinch");
-
+			g_Cvar_GameType = FindConVar("game_type");
+			g_Cvar_GameMode = FindConVar("game_mode");
+			
 			HookEvent("cs_intermission", Event_Intermission);
 			HookEvent("announce_phase_end", Event_PhaseEnd);
 			HookEvent("round_start", Event_RoundStart, EventHookMode_Pre);
@@ -212,6 +252,11 @@ public OnPluginStart()
 			
 			HookEvent("teamplay_round_start", Event_RoundStart, EventHookMode_Pre);
 			HookEvent("teamplay_round_win", Event_RoundEnd);
+			HookEvent("teamplay_win_panel", Event_TeamPlayWinPanel);
+			HookEvent("teamplay_restart_round", Event_TFRestartRound);
+			HookEvent("arena_win_panel", Event_TeamPlayWinPanel);
+			HookEvent("pve_win_panel", Event_MvMWinPanel);
+			
 		}
 		
 		default:
@@ -479,6 +524,57 @@ ChooseRandomMode(Handle:validPlugins, String:mode[], maxlength)
 	GetArrayString(validPlugins, GetRandomInt(0, size - 1), mode, maxlength);
 }
 
+public Event_TFRestartRound(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	/* Game got restarted - reset our round count tracking */
+	g_TotalRounds = 0;	
+}
+
+public Event_TeamPlayWinPanel(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	new bluescore = GetEventInt(event, "blue_score");
+	new redscore = GetEventInt(event, "red_score");
+		
+	if(GetEventInt(event, "round_complete") == 1 || StrEqual(name, "arena_win_panel"))
+	{
+		g_TotalRounds++;
+		
+		CheckMaxRounds(g_TotalRounds);
+		
+		switch(GetEventInt(event, "winning_team"))
+		{
+			case 3:
+			{
+				CheckWinLimit(bluescore);
+			}
+			case 2:
+			{
+				CheckWinLimit(redscore);				
+			}			
+			//We need to do nothing on winning_team == 0 this indicates stalemate.
+			default:
+			{
+				return;
+			}			
+		}
+		
+		new bool:lastRound = IsLastRound(g_winCount[winner], g_TotalRounds);
+	}
+}
+
+public Event_MvMWinPanel(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	if (GetEventInt(event, "winning_team") == 2)
+	{
+		new objectiveEnt = EntRefToEntIndex(g_ObjectiveEnt);
+		if (objectiveEnt != INVALID_ENT_REFERENCE)
+		{
+			g_TotalRounds = GetEntProp(g_ObjectiveEnt, Prop_Send, "m_nMannVsMachineWaveCount");
+			CheckMaxRounds(g_TotalRounds);
+		}
+	}
+}
+
 public Event_Intermission(Handle:event, const String:name[], bool:dontBroadcast)
 {
 	g_HasIntermissionStarted = true;
@@ -500,8 +596,6 @@ public Event_PhaseEnd(Handle:event, const String:name[], bool:dontBroadcast)
 
 public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 {
-	// TODO : Winlimit stuff
-	
 	new winner;
 	if (strcmp(name, "round_win") == 0 || strcmp(name, "dod_round_win") == 0)
 	{
@@ -513,17 +607,21 @@ public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 		winner = GetEventInt(event, "winner");
 	}	
 	
-	g_TotalRounds++;
-	
-	if (winner > 1 && winner < MAXTEAMS)
+	if (winner > 1)
 	{
 		g_winCount[winner]++;
 	}
 	
-	CheckWinLimit(g_winCount[winner]);
-	CheckMaxRounds(g_TotalRounds);
+	if (winner >= MAXTEAMS)
+	{
+		SetFailState("Mod exceed maximum team count - Please file a bug report.");	
+	}
+	
+	g_TotalRounds++;
+	
+	new bool:lastRound = IsLastRound(g_winCount[winner], g_TotalRounds);
 
-	if (GetConVarInt(g_Cvar_Frequency) == Frequency_Map)
+	if (lastRound || GetConVarInt(g_Cvar_Frequency) == Frequency_Map)
 	{
 		return;
 	}
@@ -551,6 +649,72 @@ public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 		
 	}
 	
+}
+
+bool:IsLastRound(winner_score, roundcount)
+{
+	new bool:roundEnd = false;
+	
+	if (g_Cvar_Winlimit != INVALID_HANDLE)
+	{
+		new winlimit = GetConVarInt(g_Cvar_Winlimit);
+		if (winlimit)
+		{			
+			if (winner_score >= winlimit)
+			{
+				roundEnd = true;
+			}
+		}
+	}
+
+	if (g_Cvar_Maxrounds != INVALID_HANDLE)
+	{
+		new maxrounds = GetConVarInt(g_Cvar_Maxrounds);
+		if (maxrounds)
+		{
+			if (roundcount >= maxrounds)
+			{
+				roundEnd = true;
+			}			
+		}
+	}
+	
+	new timeLeft;
+	GetMapTimeLeft(timeLeft);
+	
+	switch (g_EngineVersion)
+	{
+		case Engine_TF2:
+		{
+			new bool:isMvM = bool:GameRules_GetProp("m_bPlayingMannVsMachine");
+			new bool:isArena = GameRules_GetProp("m_nGameType") == TF2_GameType_Arena;
+			
+			if (!isArena && !isMvM)
+			{
+				if (timeLeft <= 300)
+				{
+					roundEnd = true;
+				}
+			}
+			else if (isArena)
+			{
+				if (timeLeft <= 0)
+				{
+					roundEnd = true;
+				}
+			}
+		}
+		
+		default:
+		{
+			if (timeLeft <= 0)
+			{
+				roundEnd = true;
+			}
+		}
+	}
+
+	return roundEnd;
 }
 
 SharedEndMapLogic(const String:map[])
@@ -1110,28 +1274,5 @@ PrintTranslationToAll(const String:plugin[], const String:translation[])
 		GetTranslatedName(plugin, i, transName, sizeof(transName));
 		
 		PrintHintText(i, "%t", translation, transName);
-	}
-}
-
-bool:IsLastRound()
-{
-	new timeLeft;
-	new maxrounds = GetConVarInt(g_Cvar_MaxRounds);;
-	
-	GetMapTimeLeft(timeleft);
-	
-	if (timeLeft <= 0)
-	{
-		return true;
-	}
-	
-	
-	
-	switch (g_EngineVersion)
-	{
-		case Engine_TF2:
-		{
-			
-		}
 	}
 }
