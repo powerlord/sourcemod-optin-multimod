@@ -109,6 +109,7 @@ new Handle:g_hMapPrefixes;
 new Handle:g_hRetryTimer = INVALID_HANDLE;
 new bool:g_bMapEnded = false;
 new bool:g_HasIntermissionStarted = false;
+new g_ObjectiveEnt = -1;
 
 // Various score counters and such to track when the last round will happen
 /* Upper bound of how many team there could be */
@@ -319,6 +320,17 @@ public OnLibraryRemoved(const String:name[])
 
 public OnMapStart()
 {
+	if (g_EngineVersion == Engine_TF2 && GameRules_GetProp("m_bPlayingMannVsMachine"))
+	{
+		g_RoundCounting = RoundCounting_MvM;
+		g_ObjectiveEnt = EntIndexToEntRef(FindEntityByClassname(-1, "tf_objective_resource"));
+	}
+	else if (g_EngineVersion == Engine_CSGO && GetConVarInt(g_Cvar_GameType) == CSGO_GameType_GunGame &&
+	GetConVarInt(g_Cvar_GameMode) == CSGO_GunGameMode_ArmsRace)
+	{
+		g_RoundCounting = RoundCounting_ArmsRace;
+	}
+
 	g_bMapEnded = false;
 	g_bNextMapMedieval = false;
 	
@@ -530,51 +542,6 @@ public Event_TFRestartRound(Handle:event, const String:name[], bool:dontBroadcas
 	g_TotalRounds = 0;	
 }
 
-public Event_TeamPlayWinPanel(Handle:event, const String:name[], bool:dontBroadcast)
-{
-	new bluescore = GetEventInt(event, "blue_score");
-	new redscore = GetEventInt(event, "red_score");
-		
-	if(GetEventInt(event, "round_complete") == 1 || StrEqual(name, "arena_win_panel"))
-	{
-		g_TotalRounds++;
-		
-		CheckMaxRounds(g_TotalRounds);
-		
-		switch(GetEventInt(event, "winning_team"))
-		{
-			case 3:
-			{
-				CheckWinLimit(bluescore);
-			}
-			case 2:
-			{
-				CheckWinLimit(redscore);				
-			}			
-			//We need to do nothing on winning_team == 0 this indicates stalemate.
-			default:
-			{
-				return;
-			}			
-		}
-		
-		new bool:lastRound = IsLastRound(g_winCount[winner], g_TotalRounds);
-	}
-}
-
-public Event_MvMWinPanel(Handle:event, const String:name[], bool:dontBroadcast)
-{
-	if (GetEventInt(event, "winning_team") == 2)
-	{
-		new objectiveEnt = EntRefToEntIndex(g_ObjectiveEnt);
-		if (objectiveEnt != INVALID_ENT_REFERENCE)
-		{
-			g_TotalRounds = GetEntProp(g_ObjectiveEnt, Prop_Send, "m_nMannVsMachineWaveCount");
-			CheckMaxRounds(g_TotalRounds);
-		}
-	}
-}
-
 public Event_Intermission(Handle:event, const String:name[], bool:dontBroadcast)
 {
 	g_HasIntermissionStarted = true;
@@ -621,6 +588,61 @@ public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 	
 	new bool:lastRound = IsLastRound(g_winCount[winner], g_TotalRounds);
 
+	DoMultiModVote(lastRound);
+}
+
+public Event_TeamPlayWinPanel(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	new bluescore = GetEventInt(event, "blue_score");
+	new redscore = GetEventInt(event, "red_score");
+		
+	if(GetEventInt(event, "round_complete") == 1 || StrEqual(name, "arena_win_panel"))
+	{
+		g_TotalRounds++;
+		
+		new bool:lastRound = false;
+		
+		switch(GetEventInt(event, "winning_team"))
+		{
+			case 3:
+			{
+				lastRound = IsLastRound(bluescore, g_TotalRounds);
+			}
+			case 2:
+			{
+				lastRound = IsLastRound(redscore, g_TotalRounds);
+			}			
+			//We need to do nothing on winning_team == 0 this indicates stalemate.
+			default:
+			{
+				return;
+			}			
+		}
+		DoMultiModVote(lastRound);
+	}
+}
+
+public Event_MvMWinPanel(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	new bool:lastRound = false;
+	if (GetEventInt(event, "winning_team") == 2)
+	{
+		new objectiveEnt = EntRefToEntIndex(g_ObjectiveEnt);
+		if (objectiveEnt != INVALID_ENT_REFERENCE)
+		{
+			new currentRound = GetEntProp(g_ObjectiveEnt, Prop_Send, "m_nMannVsMachineMaxWaveCount");
+			new totalRounds = GetEntProp(g_ObjectiveEnt, Prop_Send, "m_nMannVsMachineWaveCount");
+			if (currentRound == totalRounds)
+			{
+				lastRound = true;
+			}
+		}
+	}
+	DoMultiModVote(lastRound);
+}
+
+DoMultiModVote(bool:lastRound)
+{
 	if (lastRound || GetConVarInt(g_Cvar_Frequency) == Frequency_Map)
 	{
 		return;
@@ -653,7 +675,7 @@ public Event_RoundEnd(Handle:event, const String:name[], bool:dontBroadcast)
 
 bool:IsLastRound(winner_score, roundcount)
 {
-	new bool:roundEnd = false;
+	new bool:mapEnd = false;
 	
 	if (g_Cvar_Winlimit != INVALID_HANDLE)
 	{
@@ -662,20 +684,44 @@ bool:IsLastRound(winner_score, roundcount)
 		{			
 			if (winner_score >= winlimit)
 			{
-				roundEnd = true;
+				mapEnd = true;
 			}
 		}
 	}
 
 	if (g_Cvar_Maxrounds != INVALID_HANDLE)
 	{
-		new maxrounds = GetConVarInt(g_Cvar_Maxrounds);
+		new maxrounds;
+		
+		if (g_RoundCounting == RoundCounting_ArmsRace)
+		{
+			maxrounds = GameRules_GetProp("m_iNumGunGameProgressiveWeaponsCT");
+		}
+		else if (g_RoundCounting == RoundCounting_MvM)
+		{
+			maxrounds = GetEntProp(g_ObjectiveEnt, Prop_Send, "m_nMannVsMachineMaxWaveCount");
+		}
+		else if (g_Cvar_Maxrounds != INVALID_HANDLE)
+		{
+			maxrounds = GetConVarInt(g_Cvar_Maxrounds);
+		}
+		
 		if (maxrounds)
 		{
 			if (roundcount >= maxrounds)
 			{
-				roundEnd = true;
-			}			
+				mapEnd = true;
+			}
+			else
+			if (g_Cvar_MatchClinch != INVALID_HANDLE && GetConVarBool(g_Cvar_MatchClinch))
+			{
+				new winlimit = RoundFloat(maxrounds / 2.0);
+
+				if(winner_score >= winlimit - 1)
+				{
+					mapEnd = true;
+				}
+			}
 		}
 	}
 	
@@ -693,14 +739,14 @@ bool:IsLastRound(winner_score, roundcount)
 			{
 				if (timeLeft <= 300)
 				{
-					roundEnd = true;
+					mapEnd = true;
 				}
 			}
 			else if (isArena)
 			{
 				if (timeLeft <= 0)
 				{
-					roundEnd = true;
+					mapEnd = true;
 				}
 			}
 		}
@@ -709,12 +755,12 @@ bool:IsLastRound(winner_score, roundcount)
 		{
 			if (timeLeft <= 0)
 			{
-				roundEnd = true;
+				mapEnd = true;
 			}
 		}
 	}
 
-	return roundEnd;
+	return mapEnd;
 }
 
 SharedEndMapLogic(const String:map[])
