@@ -36,8 +36,8 @@
 #define VALIDATE_FORWARD "validateMap"
 #define TRANSLATE_FORWARD "translateName"
 
-#define STANDARD "OIMM Standard"
-#define MEDIEVAL "OIMM Medieval"
+#define STANDARD "standard"
+#define MEDIEVAL "medieval"
 
 enum RoundCounting
 {
@@ -76,7 +76,7 @@ enum
 
 new bool:g_bNativeVotes;
 
-new String:g_CurrentMode[128];
+new String:g_CurrentMode[128] = STANDARD;
 new String:g_NextMode[128];
 new String:g_NextMapMode[128];
 
@@ -116,6 +116,9 @@ new g_ObjectiveEnt = -1;
 #define MAXTEAMS 10
 new g_winCount[MAXTEAMS];
 new g_TotalRounds = 0;
+
+new String:g_FileName[PLATFORM_MAX_PATH];
+new Handle:g_Kv_Commands = INVALID_HANDLE;
 
 enum
 {
@@ -273,6 +276,8 @@ public OnPluginStart()
 	//g_Array_CurrentPlugins = CreateArray(ByteCountToCells(64));
 	AutoExecConfig(true, "optin_multimod");
 	LoadTranslations("optin_multimod.phrases");
+	
+	BuildPath(Path_SM, g_FileName, sizeof(g_FileName), "configs/oimm-commands.txt");
 }
 
 public OnConfigsExecuted()
@@ -295,6 +300,13 @@ public OnConfigsExecuted()
 			ResetConVar(g_Cvar_Bonusroundtime);
 		}
 	}
+	
+	if (g_Kv_Commands != INVALID_HANDLE)
+	{
+		CloseHandle(g_Kv_Commands);
+	}
+	g_Kv_Commands = CreateKeyValues("oimm-commands");
+	FileToKeyValues(g_Kv_Commands, g_FileName);
 }
 
 public OnAllPluginsLoaded()
@@ -477,11 +489,12 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 		return Plugin_Continue;
 	}
 	
+	DisableMode(g_CurrentMode);
+	
 	KvRewind(g_Kv_Plugins);
 	
 	if (g_CurrentMode[0] != '\0' && !StrEqual(g_CurrentMode, STANDARD) && !StrEqual(g_CurrentMode, MEDIEVAL))
 	{
-		
 		if (KvJumpToKey(g_Kv_Plugins, g_CurrentMode))
 		{
 			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
@@ -500,6 +513,8 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 	{
 		g_NextMode = STANDARD;
 	}
+	
+	EnableMode(g_NextMode);
 	
 	if (!StrEqual(g_NextMode, STANDARD) && !StrEqual(g_NextMode, MEDIEVAL))
 	{
@@ -527,6 +542,84 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 	PrintTranslationToAll(g_CurrentMode, "OIMM Current Mode");
 	
 	return Plugin_Continue;
+}
+
+bool:DisableMode(const String:gameMode[])
+{
+	new bool:changes = false;
+
+	KvRewind(g_Kv_Plugins);
+	if (gameMode[0] != '\0' && !StrEqual(gameMode, STANDARD) && !StrEqual(gameMode, MEDIEVAL))
+	{
+		if (KvJumpToKey(g_Kv_Plugins, gameMode))
+		{
+			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
+			if (statusForward != INVALID_HANDLE)
+			{
+				Call_StartForward(statusForward);
+				Call_PushCell(false);
+				Call_Finish();
+			}
+			
+			KvGoBack(g_Kv_Plugins);
+			changes = true;
+		}			
+	}
+	
+	KvRewind(g_Kv_Commands);
+	if (KvJumpToKey(g_Kv_Commands, gameMode) && KvJumpToKey(g_Kv_Commands, "disable") && KvGotoFirstSubKey(g_Kv_Commands, false))
+	{
+		do
+		{
+			decl String:value[128];
+			KvGetString(g_Kv_Commands, NULL_STRING, value, sizeof(value));
+			ServerCommand("%s", value);
+			changes = true;
+		} while (KvGotoNextKey(g_Kv_Commands, false));
+	}
+	
+	return changes;
+}
+
+bool:EnableMode(const String:gameMode[])
+{
+	new bool:changes = false;
+	
+	KvRewind(g_Kv_Plugins);
+	if (!StrEqual(gameMode, STANDARD) && !StrEqual(gameMode, MEDIEVAL))
+	{
+		if (!KvJumpToKey(g_Kv_Plugins, gameMode))
+		{
+			LogError("Could not find mode: %s", gameMode);
+			return false;
+		}
+		
+		new Handle:newStatusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
+		if (newStatusForward == INVALID_HANDLE)
+		{
+			LogError("Could not find Status Changed forward for mode: %s", gameMode);
+			return false;
+		}
+		
+		Call_StartForward(newStatusForward);
+		Call_PushCell(true);
+		Call_Finish();
+		changes = true;
+	}
+	
+	KvRewind(g_Kv_Commands);
+	if (KvJumpToKey(g_Kv_Commands, gameMode) && KvJumpToKey(g_Kv_Commands, "enable") && KvGotoFirstSubKey(g_Kv_Commands, false))
+	{
+		do
+		{
+			decl String:value[128];
+			KvGetString(g_Kv_Commands, NULL_STRING, value, sizeof(value));
+			ServerCommand("%s", value);
+			changes = true;
+		} while (KvGotoNextKey(g_Kv_Commands, false));
+	}
+
+	return changes;	
 }
 
 ChooseRandomMode(Handle:validPlugins, String:mode[], maxlength)

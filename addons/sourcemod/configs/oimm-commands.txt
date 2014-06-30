@@ -1,15 +1,15 @@
 "oimm-commands"
 {
-	"vanilla"
+	"standard"
 	{
-		"disable-cvars"
+		"disable"
 		{
 			
 		}
 
-		"disable-commands"
+		"enable"
 		{
-			
+
 		}
 	}
 }
