@@ -119,9 +119,6 @@ new g_ObjectiveEnt = -1;
 new g_winCount[MAXTEAMS];
 new g_TotalRounds = 0;
 
-new String:g_FileName[PLATFORM_MAX_PATH];
-new Handle:g_Kv_Commands = INVALID_HANDLE;
-
 enum
 {
 	Mode_Random,
@@ -278,8 +275,6 @@ public OnPluginStart()
 	//g_Array_CurrentPlugins = CreateArray(ByteCountToCells(64));
 	AutoExecConfig(true, "optin_multimod");
 	LoadTranslations("optin_multimod.phrases");
-	
-	BuildPath(Path_SM, g_FileName, sizeof(g_FileName), "configs/oimm-commands.txt");
 }
 
 public OnConfigsExecuted()
@@ -302,13 +297,6 @@ public OnConfigsExecuted()
 			ResetConVar(g_Cvar_Bonusroundtime);
 		}
 	}
-	
-	if (g_Kv_Commands != INVALID_HANDLE)
-	{
-		CloseHandle(g_Kv_Commands);
-	}
-	g_Kv_Commands = CreateKeyValues("oimm-commands");
-	FileToKeyValues(g_Kv_Commands, g_FileName);
 }
 
 public OnAllPluginsLoaded()
@@ -374,7 +362,7 @@ public OnMapEnd()
 {
 	g_HasIntermissionStarted = false;
 	
-	DisableMode(g_CurrentMode);
+	ChangeGameMode(g_CurrentMode, false);
 	
 	if (g_Cvar_Medieval != INVALID_HANDLE)
 	{
@@ -477,14 +465,14 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 		return Plugin_Continue;
 	}
 	
-	DisableMode(g_CurrentMode);
+	ChangeGameMode(g_CurrentMode, false);
 	
 	if (g_NextMode[0] == '\0')
 	{
 		g_NextMode = STANDARD;
 	}
 	
-	EnableMode(g_NextMode);
+	ChangeGameMode(g_NextMode, true);
 	
 	strcopy(g_CurrentMode, sizeof(g_CurrentMode), g_NextMode);
 	g_NextMode[0] = '\0';
@@ -494,26 +482,16 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 	return Plugin_Continue;
 }
 
-bool:DisableMode(const String:gameMode[])
+ProcessModeKeyValues(const String:gameMode[], bool:enable)
 {
-	new bool:changes = false;
-
-	KvRewind(g_Kv_Plugins);
-	if (gameMode[0] != '\0' && !StrEqual(gameMode, STANDARD) && !StrEqual(gameMode, MEDIEVAL))
+	decl String:key[8];
+	if (enable)
 	{
-		if (KvJumpToKey(g_Kv_Plugins, gameMode))
-		{
-			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
-			if (statusForward != INVALID_HANDLE)
-			{
-				Call_StartForward(statusForward);
-				Call_PushCell(false);
-				Call_Finish();
-			}
-			
-			KvGoBack(g_Kv_Plugins);
-			changes = true;
-		}			
+		key = "enable";
+	}
+	else
+	{
+		key = "disable";
 	}
 	
 	decl String:filename[PLATFORM_MAX_PATH];
@@ -521,63 +499,44 @@ bool:DisableMode(const String:gameMode[])
 	
 	new Handle:kvCommands = CreateKeyValues("oimm-commands");
 	
-	if (FileToKeyValues(kvCommands, filename) && KvJumpToKey(kvCommands, gameMode) && KvJumpToKey(kvCommands, "disable") && KvGotoFirstSubKey(kvCommands, false))
+	if (FileToKeyValues(kvCommands, filename) && KvJumpToKey(kvCommands, gameMode) && KvJumpToKey(kvCommands, key) && KvGotoFirstSubKey(kvCommands, false))
 	{
 		do
 		{
 			decl String:value[128];
 			KvGetString(kvCommands, NULL_STRING, value, sizeof(value));
 			ServerCommand("%s", value);
-			changes = true;
 		} while (KvGotoNextKey(kvCommands, false));
 	}
-	
-	return changes;
 }
 
-bool:EnableMode(const String:gameMode[])
+ChangeGameMode(const String:gameMode[], bool:enabled)
 {
-	new bool:changes = false;
-	
 	KvRewind(g_Kv_Plugins);
 	if (!StrEqual(gameMode, STANDARD) && !StrEqual(gameMode, MEDIEVAL))
 	{
 		if (!KvJumpToKey(g_Kv_Plugins, gameMode))
 		{
 			LogError("Could not find mode: %s", gameMode);
-			return false;
 		}
-		
-		new Handle:newStatusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
-		if (newStatusForward == INVALID_HANDLE)
+		else
 		{
-			LogError("Could not find Status Changed forward for mode: %s", gameMode);
-			return false;
-		}
-		
-		Call_StartForward(newStatusForward);
-		Call_PushCell(true);
-		Call_Finish();
-		changes = true;
+			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
+			if (statusForward == INVALID_HANDLE)
+			{
+				LogError("Could not find Status Changed forward for mode: %s", gameMode);
+			}
+			else
+			{
+				Call_StartForward(statusForward);
+				Call_PushCell(enabled);
+				Call_Finish();
+			}
+		}			
 	}
 	
-	decl String:filename[PLATFORM_MAX_PATH];
-	BuildPath(Path_SM, filename, sizeof(filename), "%s/%s", CONFIGS, gameMode);
-	
-	new Handle:kvCommands = CreateKeyValues("oimm-commands");
-	
-	if (FileToKeyValues(kvCommands, filename) && KvJumpToKey(kvCommands, gameMode) && KvJumpToKey(kvCommands, "enable") && KvGotoFirstSubKey(kvCommands, false))
-	{
-		do
-		{
-			decl String:value[128];
-			KvGetString(kvCommands, NULL_STRING, value, sizeof(value));
-			ServerCommand("%s", value);
-			changes = true;
-		} while (KvGotoNextKey(kvCommands, false));
-	}
-
-	return changes;	
+	ProcessModeKeyValues(gameMode, enabled);
+	ProcessModeKeyValues("all", enabled);	
 }
 
 ChooseRandomMode(Handle:validPlugins, String:mode[], maxlength)

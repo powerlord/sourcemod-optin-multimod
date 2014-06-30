@@ -1,0 +1,14 @@
+"oimm-commands"
+{
+	"name"		"All"
+
+	"disable"
+	{
+		
+	}
+
+	"enable"
+	{
+
+	}
+}
