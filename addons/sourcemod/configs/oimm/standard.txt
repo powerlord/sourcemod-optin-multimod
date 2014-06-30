@@ -1,0 +1,14 @@
+"oimm-commands"
+{
+	"name"		"Standard"
+
+	"disable"
+	{
+		
+	}
+
+	"enable"
+	{
+
+	}
+}

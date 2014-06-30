@@ -39,6 +39,8 @@
 #define STANDARD "standard"
 #define MEDIEVAL "medieval"
 
+#define CONFIGS "configs/oimm/"
+
 enum RoundCounting
 {
 	RoundCounting_Standard = 0,
@@ -332,6 +334,7 @@ public OnLibraryRemoved(const String:name[])
 
 public OnMapStart()
 {
+	g_CurrentMode = STANDARD;
 	if (g_EngineVersion == Engine_TF2 && GameRules_GetProp("m_bPlayingMannVsMachine"))
 	{
 		g_RoundCounting = RoundCounting_MvM;
@@ -371,22 +374,7 @@ public OnMapEnd()
 {
 	g_HasIntermissionStarted = false;
 	
-	if (g_CurrentMode[0] != '\0' && !StrEqual(g_CurrentMode, STANDARD) && !StrEqual(g_CurrentMode, MEDIEVAL))
-	{
-		KvRewind(g_Kv_Plugins);
-		if (KvJumpToKey(g_Kv_Plugins, g_CurrentMode))
-		{
-			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
-			if (statusForward != INVALID_HANDLE)
-			{
-				Call_StartForward(statusForward);
-				Call_PushCell(false);
-				Call_Finish();
-			}
-			
-			KvGoBack(g_Kv_Plugins);
-		}
-	}
+	DisableMode(g_CurrentMode);
 	
 	if (g_Cvar_Medieval != INVALID_HANDLE)
 	{
@@ -491,50 +479,12 @@ public Action:Event_RoundStart(Handle:event, const String:name[], bool:dontBroad
 	
 	DisableMode(g_CurrentMode);
 	
-	KvRewind(g_Kv_Plugins);
-	
-	if (g_CurrentMode[0] != '\0' && !StrEqual(g_CurrentMode, STANDARD) && !StrEqual(g_CurrentMode, MEDIEVAL))
-	{
-		if (KvJumpToKey(g_Kv_Plugins, g_CurrentMode))
-		{
-			new Handle:statusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
-			if (statusForward != INVALID_HANDLE)
-			{
-				Call_StartForward(statusForward);
-				Call_PushCell(false);
-				Call_Finish();
-			}
-			
-			KvGoBack(g_Kv_Plugins);
-		}
-	}
-	
 	if (g_NextMode[0] == '\0')
 	{
 		g_NextMode = STANDARD;
 	}
 	
 	EnableMode(g_NextMode);
-	
-	if (!StrEqual(g_NextMode, STANDARD) && !StrEqual(g_NextMode, MEDIEVAL))
-	{
-		if (!KvJumpToKey(g_Kv_Plugins, g_NextMode))
-		{
-			LogError("Could not find mode: %s", g_NextMode);
-			return Plugin_Continue;
-		}
-		
-		new Handle:newStatusForward = Handle:KvGetNum(g_Kv_Plugins, STATUS_FORWARD, _:INVALID_HANDLE);
-		if (newStatusForward == INVALID_HANDLE)
-		{
-			LogError("Could not find Status Changed forward for mode: %s", g_NextMode);
-			return Plugin_Continue;
-		}
-		
-		Call_StartForward(newStatusForward);
-		Call_PushCell(true);
-		Call_Finish();
-	}
 	
 	strcopy(g_CurrentMode, sizeof(g_CurrentMode), g_NextMode);
 	g_NextMode[0] = '\0';
@@ -566,16 +516,20 @@ bool:DisableMode(const String:gameMode[])
 		}			
 	}
 	
-	KvRewind(g_Kv_Commands);
-	if (KvJumpToKey(g_Kv_Commands, gameMode) && KvJumpToKey(g_Kv_Commands, "disable") && KvGotoFirstSubKey(g_Kv_Commands, false))
+	decl String:filename[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, filename, sizeof(filename), "%s/%s", CONFIGS, gameMode);
+	
+	new Handle:kvCommands = CreateKeyValues("oimm-commands");
+	
+	if (FileToKeyValues(kvCommands, filename) && KvJumpToKey(kvCommands, gameMode) && KvJumpToKey(kvCommands, "disable") && KvGotoFirstSubKey(kvCommands, false))
 	{
 		do
 		{
 			decl String:value[128];
-			KvGetString(g_Kv_Commands, NULL_STRING, value, sizeof(value));
+			KvGetString(kvCommands, NULL_STRING, value, sizeof(value));
 			ServerCommand("%s", value);
 			changes = true;
-		} while (KvGotoNextKey(g_Kv_Commands, false));
+		} while (KvGotoNextKey(kvCommands, false));
 	}
 	
 	return changes;
@@ -607,16 +561,20 @@ bool:EnableMode(const String:gameMode[])
 		changes = true;
 	}
 	
-	KvRewind(g_Kv_Commands);
-	if (KvJumpToKey(g_Kv_Commands, gameMode) && KvJumpToKey(g_Kv_Commands, "enable") && KvGotoFirstSubKey(g_Kv_Commands, false))
+	decl String:filename[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, filename, sizeof(filename), "%s/%s", CONFIGS, gameMode);
+	
+	new Handle:kvCommands = CreateKeyValues("oimm-commands");
+	
+	if (FileToKeyValues(kvCommands, filename) && KvJumpToKey(kvCommands, gameMode) && KvJumpToKey(kvCommands, "enable") && KvGotoFirstSubKey(kvCommands, false))
 	{
 		do
 		{
 			decl String:value[128];
-			KvGetString(g_Kv_Commands, NULL_STRING, value, sizeof(value));
+			KvGetString(kvCommands, NULL_STRING, value, sizeof(value));
 			ServerCommand("%s", value);
 			changes = true;
-		} while (KvGotoNextKey(g_Kv_Commands, false));
+		} while (KvGotoNextKey(kvCommands, false));
 	}
 
 	return changes;	
@@ -1064,11 +1022,19 @@ public NV_VoteHandler(Handle:menu, MenuAction:action, param1, param2)
 			{
 				translation = "OIMM Next Map Mode";
 				strcopy(g_NextMapMode, sizeof(g_NextMapMode), winner);
+				if (StrEqual(winner, MEDIEVAL))
+				{
+					g_bNextMapMedieval = true;
+				}
 			}
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextMap FirstRound"))
 			{
 				translation = "OIMM Next Map First Round Mode";
 				strcopy(g_NextMapMode, sizeof(g_NextMapMode), winner);
+				if (StrEqual(winner, MEDIEVAL))
+				{
+					g_bNextMapMedieval = true;
+				}
 			}
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextRound"))
 			{
@@ -1155,11 +1121,19 @@ public VoteHandler(Handle:menu, MenuAction:action, param1, param2)
 			{
 				translation = "OIMM Vote Win NextMap";
 				strcopy(g_NextMapMode, sizeof(g_NextMapMode), winner);
+				if (StrEqual(winner, MEDIEVAL))
+				{
+					g_bNextMapMedieval = true;
+				}
 			}
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextMap FirstRound"))
 			{
 				translation = "OIMM Vote Win NextMap FirstRound";
 				strcopy(g_NextMapMode, sizeof(g_NextMapMode), winner);
+				if (StrEqual(winner, MEDIEVAL))
+				{
+					g_bNextMapMedieval = true;
+				}
 			}
 			else if (StrEqual(voteTitle, "OIMM Vote Mode NextRound"))
 			{

@@ -1,0 +1,14 @@
+"oimm-commands"
+{
+	"name"		"Medieval"
+
+	"disable"
+	{
+		
+	}
+
+	"enable"
+	{
+
+	}
+}
