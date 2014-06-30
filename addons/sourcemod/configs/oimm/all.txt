@@ -1,6 +1,7 @@
 "oimm-commands"
 {
 	"name"		"All"
+	"description"	"This file is called when any plugin loads or unloads.  It can be used to adjust cvars and other plugin dependencies."
 
 	"disable"
 	{
